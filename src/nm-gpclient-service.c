@@ -434,6 +434,189 @@ create_persistent_tundev(const char *suggested_name, GError **error)
 	return g_strndup(ifr.ifr_name, IFNAMSIZ);
 }
 
+static GVariant *
+nm_get_property (GDBusConnection *connection,
+                 const char *path,
+                 const char *interface,
+                 const char *property)
+{
+	GVariant *ret;
+	GVariant *value = NULL;
+	GError *error = NULL;
+
+	ret = g_dbus_connection_call_sync (connection,
+	                                   "org.freedesktop.NetworkManager",
+	                                   path,
+	                                   "org.freedesktop.DBus.Properties",
+	                                   "Get",
+	                                   g_variant_new ("(ss)", interface, property),
+	                                   G_VARIANT_TYPE ("(v)"),
+	                                   G_DBUS_CALL_FLAGS_NONE,
+	                                   2000,
+	                                   NULL,
+	                                   &error);
+	if (!ret) {
+		_LOGD ("Could not read NetworkManager property %s.%s on %s: %s",
+		       interface, property, path, error->message);
+		g_clear_error (&error);
+		return NULL;
+	}
+
+	g_variant_get (ret, "(@v)", &value);
+	g_variant_unref (ret);
+	return value;
+}
+
+static gboolean
+active_connection_uses_tun (GDBusConnection *connection,
+                            const char *active_path,
+                            const char *tun_name,
+                            uid_t tun_owner)
+{
+	GVariant *type_v, *vpn_v, *devices_v;
+	GVariantIter iter;
+	const char *type;
+	const char *device_path;
+	gboolean vpn;
+	gboolean found = FALSE;
+
+	type_v = nm_get_property (connection,
+	                          active_path,
+	                          "org.freedesktop.NetworkManager.Connection.Active",
+	                          "Type");
+	if (!type_v)
+		return FALSE;
+	type = g_variant_get_string (type_v, NULL);
+	if (strcmp (type, "tun") != 0) {
+		g_variant_unref (type_v);
+		return FALSE;
+	}
+	g_variant_unref (type_v);
+
+	vpn_v = nm_get_property (connection,
+	                         active_path,
+	                         "org.freedesktop.NetworkManager.Connection.Active",
+	                         "Vpn");
+	if (vpn_v) {
+		vpn = g_variant_get_boolean (vpn_v);
+		g_variant_unref (vpn_v);
+		if (vpn)
+			return FALSE;
+	}
+
+	devices_v = nm_get_property (connection,
+	                             active_path,
+	                             "org.freedesktop.NetworkManager.Connection.Active",
+	                             "Devices");
+	if (!devices_v)
+		return FALSE;
+
+	g_variant_iter_init (&iter, devices_v);
+	while (g_variant_iter_next (&iter, "&o", &device_path)) {
+		GVariant *iface_v;
+		GVariant *owner_v;
+		const char *iface;
+		gint64 owner;
+
+		iface_v = nm_get_property (connection,
+		                           device_path,
+		                           "org.freedesktop.NetworkManager.Device",
+		                           "Interface");
+		if (!iface_v)
+			continue;
+
+		iface = g_variant_get_string (iface_v, NULL);
+		if (strcmp (iface, tun_name) != 0) {
+			g_variant_unref (iface_v);
+			continue;
+		}
+		g_variant_unref (iface_v);
+
+		owner_v = nm_get_property (connection,
+		                           device_path,
+		                           "org.freedesktop.NetworkManager.Device.Tun",
+		                           "Owner");
+		if (owner_v) {
+			owner = g_variant_get_int64 (owner_v);
+			g_variant_unref (owner_v);
+			if (owner != (gint64) tun_owner)
+				continue;
+		}
+
+		found = TRUE;
+		break;
+	}
+	g_variant_unref (devices_v);
+
+	return found;
+}
+
+static void
+deactivate_assumed_tun_connection (const char *tun_name)
+{
+	GDBusConnection *connection;
+	GVariant *active_v;
+	GVariantIter iter;
+	GError *error = NULL;
+	struct passwd *pw;
+	const char *active_path;
+
+	if (!tun_name || !tun_name[0])
+		return;
+
+	pw = getpwnam (NM_OPENCONNECT_USER);
+	if (!pw)
+		return;
+
+	connection = g_bus_get_sync (G_BUS_TYPE_SYSTEM, NULL, &error);
+	if (!connection) {
+		_LOGD ("Could not connect to system bus for tun cleanup: %s", error->message);
+		g_clear_error (&error);
+		return;
+	}
+
+	active_v = nm_get_property (connection,
+	                            "/org/freedesktop/NetworkManager",
+	                            "org.freedesktop.NetworkManager",
+	                            "ActiveConnections");
+	if (!active_v) {
+		g_object_unref (connection);
+		return;
+	}
+
+	g_variant_iter_init (&iter, active_v);
+	while (g_variant_iter_next (&iter, "&o", &active_path)) {
+		GVariant *ret;
+
+		if (!active_connection_uses_tun (connection, active_path, tun_name, pw->pw_uid))
+			continue;
+
+		ret = g_dbus_connection_call_sync (connection,
+		                                   "org.freedesktop.NetworkManager",
+		                                   "/org/freedesktop/NetworkManager",
+		                                   "org.freedesktop.NetworkManager",
+		                                   "DeactivateConnection",
+		                                   g_variant_new ("(o)", active_path),
+		                                   NULL,
+		                                   G_DBUS_CALL_FLAGS_NONE,
+		                                   2000,
+		                                   NULL,
+		                                   &error);
+		if (!ret) {
+			_LOGW ("Could not deactivate assumed tun connection %s on %s: %s",
+			       active_path, tun_name, error->message);
+			g_clear_error (&error);
+			continue;
+		}
+
+		_LOGI ("Deactivated assumed tun connection %s on %s", active_path, tun_name);
+		g_variant_unref (ret);
+	}
+
+	g_variant_unref (active_v);
+	g_object_unref (connection);
+}
+
 static void
 destroy_persistent_tundev(char *tun_name)
 {
@@ -512,6 +695,7 @@ openconnect_watch_cb (GPid pid, gint status, gpointer user_data)
 	priv->disconnect_requested = FALSE;
 
 	if (priv->tun_name) {
+		deactivate_assumed_tun_connection (priv->tun_name);
 		destroy_persistent_tundev (priv->tun_name);
 		g_free (priv->tun_name);
 		priv->tun_name = NULL;
@@ -785,10 +969,19 @@ real_need_secrets (NMVpnServicePlugin *plugin,
                    const char **setting_name,
                    GError **error)
 {
+	NMOpenconnectPluginPrivate *priv = NM_OPENCONNECT_PLUGIN_GET_PRIVATE (plugin);
+	NMSettingConnection *s_con;
 	NMSettingVpn *s_vpn;
+	const char *tun_name;
 
 	g_return_val_if_fail (NM_IS_VPN_SERVICE_PLUGIN (plugin), FALSE);
 	g_return_val_if_fail (NM_IS_CONNECTION (connection), FALSE);
+
+	s_con = nm_connection_get_setting_connection (connection);
+	if (!priv->pid) {
+		tun_name = s_con ? nm_setting_connection_get_interface_name (s_con) : NULL;
+		deactivate_assumed_tun_connection (tun_name && tun_name[0] ? tun_name : "vpn0");
+	}
 
 	s_vpn = nm_connection_get_setting_vpn (connection);
 	if (!s_vpn) {
