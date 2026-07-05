@@ -44,6 +44,6 @@ GType nm_openconnect_plugin_get_type (void);
 
 NMOpenconnectPlugin *nm_openconnect_plugin_new (const char *bus_name);
 
-#define NM_OPENCONNECT_USER "nm-openconnect"
+#define NM_OPENCONNECT_USER "nm-gpclient"
 
 #endif /* NM_OPENCONNECT_PLUGIN_H */

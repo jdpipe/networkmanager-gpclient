@@ -25,13 +25,21 @@
 #ifndef __NM_SERVICE_DEFINES_H__
 #define __NM_SERVICE_DEFINES_H__
 
-#define NM_VPN_SERVICE_TYPE_OPENCONNECT "org.freedesktop.NetworkManager.openconnect"
+#define NM_VPN_SERVICE_TYPE_OPENCONNECT "org.freedesktop.NetworkManager.gpclient"
 
-#define NM_DBUS_SERVICE_OPENCONNECT    "org.freedesktop.NetworkManager.openconnect"
-#define NM_DBUS_INTERFACE_OPENCONNECT  "org.freedesktop.NetworkManager.openconnect"
-#define NM_DBUS_PATH_OPENCONNECT       "/org/freedesktop/NetworkManager/openconnect"
+#define NM_DBUS_SERVICE_OPENCONNECT    "org.freedesktop.NetworkManager.gpclient"
+#define NM_DBUS_INTERFACE_OPENCONNECT  "org.freedesktop.NetworkManager.gpclient"
+#define NM_DBUS_PATH_OPENCONNECT       "/org/freedesktop/NetworkManager/gpclient"
 
 #define NM_OPENCONNECT_KEY_GATEWAY "gateway"
+#define NM_OPENCONNECT_KEY_PORTAL "portal"
+#define NM_OPENCONNECT_KEY_AUTO_GATEWAY "auto_gateway"
+#define NM_OPENCONNECT_KEY_AS_GATEWAY "as_gateway"
+#define NM_OPENCONNECT_KEY_BROWSER "browser"
+#define NM_OPENCONNECT_KEY_CLIENT_VERSION "client_version"
+#define NM_OPENCONNECT_KEY_HOST_ID "host_id"
+#define NM_OPENCONNECT_KEY_FIX_OPENSSL "fix_openssl"
+#define NM_OPENCONNECT_KEY_IGNORE_TLS_ERRORS "ignore_tls_errors"
 #define NM_OPENCONNECT_KEY_COOKIE "cookie"
 #define NM_OPENCONNECT_KEY_GWCERT "gwcert"
 #define NM_OPENCONNECT_KEY_RESOLVE "resolve"
@@ -44,6 +52,7 @@
 #define NM_OPENCONNECT_KEY_PEM_PASSPHRASE_FSID "pem_passphrase_fsid"
 #define NM_OPENCONNECT_KEY_PREVENT_INVALID_CERT "prevent_invalid_cert"
 #define NM_OPENCONNECT_KEY_DISABLE_UDP "disable_udp"
+#define NM_OPENCONNECT_KEY_NO_DTLS "no_dtls"
 #define NM_OPENCONNECT_KEY_PROTOCOL "protocol"
 #define NM_OPENCONNECT_KEY_PROXY "proxy"
 #define NM_OPENCONNECT_KEY_CSD_ENABLE "enable_csd_trojan"

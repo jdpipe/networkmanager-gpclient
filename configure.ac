@@ -1,9 +1,9 @@
 AC_PREREQ(2.52)
 
-AC_INIT(NetworkManager-openconnect,
-        1.2.11,
-        https://gitlab.gnome.org/GNOME/NetworkManager-openconnect/issues,
-        NetworkManager-openconnect)
+AC_INIT(NetworkManager-gpclient,
+        0.1.0,
+        https://github.com/yuezk/GlobalProtect-openconnect,
+        NetworkManager-gpclient)
 AM_INIT_AUTOMAKE([no-dist-gzip dist-xz])
 AM_MAINTAINER_MODE
 
@@ -57,7 +57,10 @@ AC_CHECK_FUNCS(select socket uname)
 GIT_SHA_RECORD(NM_GIT_SHA)
 
 AC_SEARCH_LIBS([dlopen], [dl dld], [], [ac_cv_search_dlopen=])
-AC_SUBST([DL_LIBS], "$ac_cv_search_dlopen")
+AS_IF([test "x$ac_cv_search_dlopen" = "xnone required"],
+      [DL_LIBS=],
+      [DL_LIBS="$ac_cv_search_dlopen"])
+AC_SUBST([DL_LIBS])
 
 dnl ensure that when the Automake generated makefile calls aclocal,
 dnl it honours the $ACLOCAL_FLAGS environment variable
@@ -70,9 +73,12 @@ AC_SUBST([ACLOCAL_AMFLAGS])
 dnl
 dnl GNOME support
 dnl
-AC_ARG_WITH(gnome, AS_HELP_STRING([--without-gnome], [Build NetworkManager-openconnect without GNOME support, e.g. vpn service only]), [], [with_gnome_specified=no])
-AC_ARG_WITH(gtk4, AS_HELP_STRING([--with-gtk4], [Build NetworkManager-openconnect with libnma-gtk4 support]), [], [with_gtk4_specified=no])
-AC_ARG_WITH(libnm-glib, AS_HELP_STRING([--with-libnm-glib], [Build NetworkManager-openconnect with libnm-glib compatibility (deprecated)]), [], [with_libnm_glib_specified=no])
+AC_ARG_WITH(gnome, AS_HELP_STRING([--without-gnome], [Build NetworkManager-gpclient without GNOME support, e.g. vpn service only]), [], [with_gnome_specified=no])
+AC_ARG_WITH(gtk4, AS_HELP_STRING([--with-gtk4], [Build NetworkManager-gpclient with libnma-gtk4 support]), [], [with_gtk4_specified=no])
+AC_ARG_WITH(libnm-glib, AS_HELP_STRING([--with-libnm-glib], [Build NetworkManager-gpclient with libnm-glib compatibility (deprecated)]), [], [with_libnm_glib_specified=no])
+if test "$with_gnome_specified" == no; then
+	with_gnome=no
+fi
 if test "$with_libnm_glib_specified" != no -a "$with_libnm_glib" != no; then
 	if test "$with_gnome_specified" != no -a "$with_gnome" == no; then
 		AC_MSG_ERROR(Building --with-libnm-glib conflicts with --without-gnome)
@@ -99,12 +105,9 @@ AM_CONDITIONAL(WITH_LIBNM_GLIB, test "$with_libnm_glib" != no)
 
 AC_ARG_ENABLE(absolute-paths, AS_HELP_STRING([--enable-absolute-paths], [Use absolute paths to in .name files. Useful for development. (default is no)]))
 
-GETTEXT_PACKAGE=NetworkManager-openconnect
+GETTEXT_PACKAGE=NetworkManager-gpclient
 AC_SUBST(GETTEXT_PACKAGE)
 AC_DEFINE_UNQUOTED(GETTEXT_PACKAGE,"$GETTEXT_PACKAGE", [Gettext package])
-
-IT_PROG_INTLTOOL([0.35])
-AM_GLIB_GNU_GETTEXT
 
 PKG_CHECK_MODULES(GLIB, glib-2.0 >= 2.34)
 GLIB_CFLAGS="$GLIB_CFLAGS -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_34"
@@ -113,18 +116,11 @@ GLIB_CFLAGS="$GLIB_CFLAGS -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_34"
 PKG_CHECK_MODULES(GMODULE, gmodule-2.0)
 PKG_CHECK_MODULES(LIBXML, libxml-2.0)
 
-if test x"$with_gnome" != xno || test x"$with_gtk4" != xno; then
-	PKG_CHECK_MODULES(LIBSECRET, libsecret-1 >= 0.18)
-fi
-
 if test x"$with_gnome" != xno; then
 	PKG_CHECK_MODULES(GTK, gtk+-3.0 >= 3.12)
 	GTK_CFLAGS="$GTK_CFLAGS -DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_3_12"
 	GTK_CFLAGS="$GTK_CFLAGS -DGDK_VERSION_MAX_ALLOWED=GDK_VERSION_3_12"
 	PKG_CHECK_MODULES(LIBNMA, libnma >= 1.2.0)
-
-	PKG_CHECK_MODULES(GCR, gcr-3 >= 3.4)
-	GCR_CFLAGS="$GCR_CFLAGS -DGCR_API_SUBJECT_TO_CHANGE"
 
 	if test x"$with_libnm_glib" != xno; then
 		PKG_CHECK_MODULES(LIBNM_GLIB,
@@ -142,29 +138,15 @@ if test x"$with_gtk4" != xno; then
 	PKG_CHECK_MODULES(GTK4, gtk4 >= 4.0)
 	GTK4_CFLAGS="$GTK4_CFLAGS -DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_4_0"
 	GTK4_CFLAGS="$GTK4_CFLAGS -DGDK_VERSION_MAX_ALLOWED=GDK_VERSION_4_0"
-	PKG_CHECK_MODULES(LIBNMA_GTK4, libnma-gtk4 >= 1.8.33)
 fi
 
 PKG_CHECK_MODULES(LIBNM, libnm >= 1.2.0)
 LIBNM_CFLAGS="$LIBNM_CFLAGS -DNM_VERSION_MIN_REQUIRED=NM_VERSION_1_2"
 LIBNM_CFLAGS="$LIBNM_CFLAGS -DNM_VERSION_MAX_ALLOWED=NM_VERSION_1_4"
 
-AC_ARG_WITH(authdlg, AS_HELP_STRING([--without-authdlg], [Build NetworkManager-openconnect without authentication dialog]), [], [with_authdlg_specified=no])
-if test x"$with_authdlg_specified" == xno; then
-	with_authdlg="$with_gnome"
-else
-	if test x"$with_authdlg" != xno; then
-		if test x"$with_gnome" == xno; then
-			AC_MSG_ERROR(Building --with-authdlg requires --with-gnome)
-		fi
-		with_authdlg=yes
-	fi
-fi
+AC_ARG_WITH(authdlg, AS_HELP_STRING([--without-authdlg], [Build NetworkManager-gpclient without authentication dialog]), [], [with_authdlg=yes])
 if test x"$with_authdlg" != xno; then
-	PKG_CHECK_MODULES(OPENCONNECT, openconnect >= 3.02)
-	PKG_CHECK_MODULES(WEBKIT, webkit2gtk-4.1, [wekbit=4.1],
-				  [PKG_CHECK_MODULES(WEBKIT, webkit2gtk-4.0,
-				  [webkit=4.0], AC_MSG_ERROR(Neither webkit2gtk-4.0 nor wekit2gtk-4.1 found))])
+	with_authdlg=yes
 fi
 AM_CONDITIONAL(WITH_AUTHDLG, test x"$with_authdlg" != xno)
 
@@ -188,7 +170,7 @@ AC_SUBST(NM_VPN_SERVICE_DIR)
 
 NM_COMPILER_WARNINGS
 
-NM_PLUGIN_DIR="$libdir/NetworkManager"
+NM_PLUGIN_DIR=`$PKG_CONFIG --define-variable prefix='\${prefix}' --variable plugindir libnm`
 AC_SUBST(NM_PLUGIN_DIR)
 if test x"$enable_absolute_paths" == x"yes"; then
 	NM_PLUGIN_DIR_NAME_FILE="$NM_PLUGIN_DIR/"
@@ -215,7 +197,6 @@ fi
 
 AC_CONFIG_FILES([
 Makefile
-po/Makefile.in
 ])
 AC_OUTPUT
 

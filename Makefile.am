@@ -1,6 +1,6 @@
 AUTOMAKE_OPTIONS = subdir-objects
 
-SUBDIRS = . po
+SUBDIRS = .
 
 EXTRA_DIST =
 
@@ -11,10 +11,10 @@ plugin_LTLIBRARIES =
 CLEANFILES = *.bak *~
 
 dbusservicedir = $(datadir)/dbus-1/system.d
-dbusservice_DATA = nm-openconnect-service.conf
+dbusservice_DATA = nm-gpclient-service.conf
 
 nmvpnservicedir = $(NM_VPN_SERVICE_DIR)
-nmvpnservice_DATA = nm-openconnect-service.name
+nmvpnservice_DATA = nm-gpclient-service.name
 
 ###############################################################################
 
@@ -24,52 +24,49 @@ src_cppflags = \
 	$(LIBNM_CFLAGS) \
 	$(NULL)
 
-libexec_PROGRAMS += src/nm-openconnect-service
+libexec_PROGRAMS += src/nm-gpclient-service
 
-src_nm_openconnect_service_CPPFLAGS = \
+src_nm_gpclient_service_CPPFLAGS = \
 	$(src_cppflags) \
 	-DLIBEXECDIR=\""$(libexecdir)"\" \
 	-DNM_OPENCONNECT_LOCALEDIR=\"$(datadir)/locale\" \
 	$(NULL)
 
-src_nm_openconnect_service_SOURCES = \
+src_nm_gpclient_service_SOURCES = \
 	$(top_srcdir)/shared/nm-utils/nm-shared-utils.c \
 	$(top_srcdir)/shared/nm-utils/nm-shared-utils.h \
-	src/nm-openconnect-service.c \
-	src/nm-openconnect-service.h \
+	src/nm-gpclient-service.c \
+	src/nm-gpclient-service.h \
 	$(NULL)
 
-src_nm_openconnect_service_LDADD = \
+src_nm_gpclient_service_LDADD = \
 	$(GLIB_LIBS) \
 	$(LIBNM_LIBS)
 
-libexec_PROGRAMS += src/nm-openconnect-service-openconnect-helper
+libexec_PROGRAMS += src/nm-gpclient-service-helper
 
-src_nm_openconnect_service_openconnect_helper_CPPFLAGS = \
+src_nm_gpclient_service_helper_CPPFLAGS = \
 	$(src_cppflags) \
 	$(NULL)
 
-src_nm_openconnect_service_openconnect_helper_SOURCES = \
+src_nm_gpclient_service_helper_SOURCES = \
 	$(top_srcdir)/shared/nm-utils/nm-shared-utils.c \
 	$(top_srcdir)/shared/nm-utils/nm-shared-utils.h \
-	src/nm-openconnect-service-openconnect-helper.c
+	src/nm-gpclient-service-helper.c
 
-src_nm_openconnect_service_openconnect_helper_LDADD = \
+src_nm_gpclient_service_helper_LDADD = \
 	$(GTHREAD_LIBS) \
 	$(LIBNM_LIBS)
 
 ###############################################################################
 
-plugindir = $(libdir)/NetworkManager
-plugin_LTLIBRARIES += properties/libnm-vpn-plugin-openconnect.la
+plugindir = $(NM_PLUGIN_DIR)
 if WITH_GNOME
-plugin_LTLIBRARIES += properties/libnm-vpn-plugin-openconnect-editor.la
-if WITH_LIBNM_GLIB
-plugin_LTLIBRARIES += properties/libnm-openconnect-properties.la
-endif
+plugin_LTLIBRARIES += properties/libnm-vpn-plugin-gpclient.la
+plugin_LTLIBRARIES += properties/libnm-vpn-plugin-gpclient-editor.la
 endif
 if WITH_GTK4
-plugin_LTLIBRARIES += properties/libnm-gtk4-vpn-plugin-openconnect-editor.la
+plugin_LTLIBRARIES += properties/libnm-gtk4-vpn-plugin-gpclient-editor.la
 endif
 
 properties/resources.h: properties/gresource.xml
@@ -99,168 +96,105 @@ EXTRA_DIST += \
 EXTRA_DIST += \
 	gtk4/nm-openconnect-dialog.ui
 
-plugin_sources = \
-	properties/nm-openconnect-editor-plugin.c \
-	properties/nm-openconnect-editor-plugin.h \
-	$(NULL)
-
-editor_sources = \
-	properties/auth-helpers.c \
-	properties/auth-helpers.h \
-	properties/nm-openconnect-editor.c \
-	properties/nm-openconnect-editor.h
-	$(NULL)
-
 properties_cppflags = \
 	$(GLIB_CFLAGS) \
 	$(GMODULE_CFLAGS) \
-	$(OPENCONNECT_CFLAGS) \
 	-I$(top_srcdir)/shared \
 	-DLOCALEDIR=\"$(datadir)/locale\"
 
 ###############################################################################
 
-properties_libnm_vpn_plugin_openconnect_la_SOURCES = \
-	$(top_srcdir)/shared/nm-utils/nm-vpn-editor-plugin-call.h \
+properties_libnm_vpn_plugin_gpclient_la_SOURCES = \
 	$(top_srcdir)/shared/nm-utils/nm-vpn-plugin-utils.c \
 	$(top_srcdir)/shared/nm-utils/nm-vpn-plugin-utils.h \
-	$(plugin_sources)
+	properties/nm-gpclient-editor-plugin.c \
+	properties/nm-gpclient-editor-plugin.h
 
-properties_libnm_vpn_plugin_openconnect_la_CFLAGS = \
+properties_libnm_vpn_plugin_gpclient_la_CFLAGS = \
 	-DNETWORKMANAGER_COMPILATION=NM_NETWORKMANAGER_COMPILATION_LIB_BASE \
 	$(properties_cppflags) \
 	$(LIBNM_CFLAGS)
 
-properties_libnm_vpn_plugin_openconnect_la_LIBADD = \
-	$(GLIB_LIBS) \
+properties_libnm_vpn_plugin_gpclient_la_LIBADD = \
 	$(GMODULE_LIBS) \
-	$(LIBNM_LIBS) \
-	$(OPENCONNECT_LIBS) \
 	$(DL_LIBS) \
-	$(NULL)
+	$(LIBNM_LIBS)
 
-properties_libnm_vpn_plugin_openconnect_la_LDFLAGS = \
+properties_libnm_vpn_plugin_gpclient_la_LDFLAGS = \
 	-avoid-version \
-	-Wl,--version-script="$(srcdir)/properties/libnm-vpn-plugin-openconnect.ver"
+	-Wl,--version-script="$(srcdir)/properties/libnm-vpn-plugin-gpclient.ver"
 
 ###############################################################################
 
-properties_libnm_vpn_plugin_openconnect_editor_la_SOURCES = \
-	$(editor_sources)
+properties_libnm_vpn_plugin_gpclient_editor_la_SOURCES = \
+	properties/nm-gpclient-editor.c \
+	properties/nm-gpclient-editor-plugin.h
 
-nodist_properties_libnm_vpn_plugin_openconnect_editor_la_SOURCES = \
-	properties/resources.h \
-	properties/resources.c
-
-properties_libnm_vpn_plugin_openconnect_editor_la_CFLAGS = \
+properties_libnm_vpn_plugin_gpclient_editor_la_CFLAGS = \
 	-DNETWORKMANAGER_COMPILATION=NM_NETWORKMANAGER_COMPILATION_LIB_EDITOR \
 	$(properties_cppflags) \
 	$(GTK_CFLAGS) \
 	$(LIBNM_CFLAGS) \
 	$(LIBNMA_CFLAGS)
 
-properties_libnm_vpn_plugin_openconnect_editor_la_LIBADD = \
+properties_libnm_vpn_plugin_gpclient_editor_la_LIBADD = \
 	$(GTK_LIBS) \
 	$(LIBNM_LIBS) \
-	$(LIBNMA_LIBS) \
-	$(OPENCONNECT_LIBS)
+	$(LIBNMA_LIBS)
 
-properties_libnm_vpn_plugin_openconnect_editor_la_LDFLAGS = \
+properties_libnm_vpn_plugin_gpclient_editor_la_LDFLAGS = \
 	-avoid-version \
-	-Wl,--version-script="$(srcdir)/properties/libnm-vpn-plugin-openconnect-editor.ver"
+	-Wl,--version-script="$(srcdir)/properties/libnm-vpn-plugin-gpclient-editor.ver"
 
-###############################################################################
+properties_libnm_gtk4_vpn_plugin_gpclient_editor_la_SOURCES = \
+	properties/nm-gpclient-editor.c \
+	properties/nm-gpclient-editor-plugin.h
 
-properties_libnm_gtk4_vpn_plugin_openconnect_editor_la_SOURCES = \
-	$(editor_sources)
-
-nodist_properties_libnm_gtk4_vpn_plugin_openconnect_editor_la_SOURCES = \
-	properties/resources.h \
-	gtk4/resources.c
-
-properties_libnm_gtk4_vpn_plugin_openconnect_editor_la_CFLAGS = \
+properties_libnm_gtk4_vpn_plugin_gpclient_editor_la_CFLAGS = \
 	-DNETWORKMANAGER_COMPILATION=NM_NETWORKMANAGER_COMPILATION_LIB_EDITOR \
+	-DGPCLIENT_GTK4 \
 	$(properties_cppflags) \
 	$(GTK4_CFLAGS) \
-	$(LIBNM_CFLAGS) \
-	$(LIBNMA_GTK4_CFLAGS)
+	$(LIBNM_CFLAGS)
 
-properties_libnm_gtk4_vpn_plugin_openconnect_editor_la_LIBADD = \
+properties_libnm_gtk4_vpn_plugin_gpclient_editor_la_LIBADD = \
 	$(GTK4_LIBS) \
-	$(LIBNM_LIBS) \
-	$(LIBNMA_GTK4_LIBS) \
-	$(OPENCONNECT_LIBS)
+	$(LIBNM_LIBS)
 
-properties_libnm_gtk4_vpn_plugin_openconnect_editor_la_LDFLAGS = \
+properties_libnm_gtk4_vpn_plugin_gpclient_editor_la_LDFLAGS = \
 	-avoid-version \
-	-Wl,--version-script="$(srcdir)/properties/libnm-vpn-plugin-openconnect-editor.ver"
-
-###############################################################################
-
-properties_libnm_openconnect_properties_la_SOURCES = \
-	$(plugin_sources) \
-	$(editor_sources)
-
-nodist_properties_libnm_openconnect_properties_la_SOURCES = \
-	properties/resources.h \
-	properties/resources.c
-
-properties_libnm_openconnect_properties_la_CFLAGS = \
-	-DNM_VPN_OLD \
-	-DNETWORKMANAGER_COMPILATION=NM_NETWORKMANAGER_COMPILATION_LIB \
-	$(properties_cppflags) \
-	$(GTK_CFLAGS) \
-	$(LIBNM_GLIB_CFLAGS)
-
-properties_libnm_openconnect_properties_la_LIBADD = \
-	$(GTK_LIBS) \
-	$(LIBNM_GLIB_LIBS) \
-	$(OPENCONNECT_LIBS)
-
-properties_libnm_openconnect_properties_la_LDFLAGS = \
-	-avoid-version \
-	-Wl,--version-script="$(srcdir)/properties/libnm-openconnect-properties.ver"
+	-Wl,--version-script="$(srcdir)/properties/libnm-vpn-plugin-gpclient-editor.ver"
 
 EXTRA_DIST += \
 	properties/libnm-openconnect-properties.ver \
+	properties/libnm-vpn-plugin-gpclient.ver \
+	properties/libnm-vpn-plugin-gpclient-editor.ver \
 	properties/libnm-vpn-plugin-openconnect.ver \
 	properties/libnm-vpn-plugin-openconnect-editor.ver \
+	properties/nm-gpclient-editor.c \
+	properties/nm-gpclient-editor-plugin.h \
+	properties/nm-gpclient-editor-plugin.c \
 	properties/nm-openconnect-dialog.ui
 
 ###############################################################################
 
-if WITH_GNOME
 if WITH_AUTHDLG
-libexec_PROGRAMS += auth-dialog/nm-openconnect-auth-dialog
-endif
+libexec_PROGRAMS += auth-dialog/nm-gpclient-auth-dialog
 endif
 
-auth_dialog_nm_openconnect_auth_dialog_CPPFLAGS = \
+auth_dialog_nm_gpclient_auth_dialog_CPPFLAGS = \
 	$(LIBNM_CFLAGS) \
 	$(GLIB_CFLAGS) \
-	$(WEBKIT_CFLAGS) \
-	$(SSO_MIB_CFLAGS) \
-	$(GTK_CFLAGS) \
-	$(GCR_CFLAGS) \
-	$(OPENCONNECT_CFLAGS) \
-	$(LIBXML_CFLAGS) \
-	$(LIBSECRET_CFLAGS) \
 	-I"$(top_srcdir)/shared" \
 	$(NULL)
 
-auth_dialog_nm_openconnect_auth_dialog_SOURCES = \
-	auth-dialog/main.c \
+auth_dialog_nm_gpclient_auth_dialog_SOURCES = \
+	auth-dialog/nm-gpclient-auth-dialog.c \
 	$(NULL)
 
-auth_dialog_nm_openconnect_auth_dialog_LDADD = \
-	$(GTK_LIBS) \
-	$(WEBKIT_LIBS) \
-	$(SSO_MIB_LIBS) \
-	$(GCR_LIBS) \
+auth_dialog_nm_gpclient_auth_dialog_LDADD = \
 	$(LIBNM_LIBS) \
-	$(OPENCONNECT_LIBS) \
-	$(LIBXML_LIBS) \
-	$(LIBSECRET_LIBS)
+	$(GLIB_LIBS)
 
 
 if WITH_LIBNM_GLIB
@@ -271,31 +205,23 @@ install-data-hook:
 	sed -e "1s|^|# This file is obsoleted by a file in $(NM_VPN_SERVICE_DIR)\n\n|" \
 	    -e 's|[@]LIBEXECDIR[@]|$(libexecdir)|g' \
 	    -e 's|[@]PLUGINDIR[@]|@NM_PLUGIN_DIR@|g' \
-	    <$(srcdir)/nm-openconnect-service.name.in \
-	    >$(DESTDIR)$(sysconfdir)/NetworkManager/VPN/nm-openconnect-service.name
+	    <$(srcdir)/nm-gpclient-service.name.in \
+	    >$(DESTDIR)$(sysconfdir)/NetworkManager/VPN/nm-gpclient-service.name
 
 uninstall-hook:
-	 rm -f $(DESTDIR)$(sysconfdir)/NetworkManager/VPN/nm-openconnect-service.name
+	 rm -f $(DESTDIR)$(sysconfdir)/NetworkManager/VPN/nm-gpclient-service.name
 endif
 
-appdatadir = $(datadir)/metainfo
-appdata_files = $(appdata_in_files:.xml.in=.xml)
-if WITH_GNOME
-appdata_DATA = $(appdata_in_files:.xml.in=.xml)
-endif
-appdata_in_files = appdata/network-manager-openconnect.metainfo.xml.in
-@INTLTOOL_XML_RULE@
-
-nm-openconnect-service.name: $(srcdir)/nm-openconnect-service.name.in
+nm-gpclient-service.name: $(srcdir)/nm-gpclient-service.name.in Makefile
 	sed -e 's|[@]LIBEXECDIR[@]|$(libexecdir)|g' \
-	    -e 's|[@]PLUGINDIR[@]/|@NM_PLUGIN_DIR_NAME_FILE@|g' \
+	    -e 's|[@]PLUGINDIR[@]|$(NM_PLUGIN_DIR)|g' \
 	    $< >$@
 
-nm-openconnect-sysusers.conf: $(srcdir)/nm-openconnect-sysusers.conf.in
+nm-gpclient-sysusers.conf: $(srcdir)/nm-gpclient-sysusers.conf.in Makefile
 	sed -e 's|[@]USER_LOCKED_UNLOCKED[@]|$(NM_USER_LOCKED_UNLOCKED)|g' \
 	    $< >$@
 nmopenconnectsysusersdir = $(NM_SYSUSERS_DIR)
-nmopenconnectsysusers_DATA = nm-openconnect-sysusers.conf
+nmopenconnectsysusers_DATA = nm-gpclient-sysusers.conf
 
 DISTCHECK_CONFIGURE_FLAGS = \
 	--enable-more-warnings=yes \
@@ -303,25 +229,19 @@ DISTCHECK_CONFIGURE_FLAGS = \
 
 CLEANFILES +=				\
 	$(nmvpnservice_DATA)		\
-	$(desktop_DATA)			\
-	$(appdata_files)
+	$(desktop_DATA)
 
-DISTCLEANFILES = intltool-extract intltool-merge intltool-update
+DISTCLEANFILES =
 
 ACLOCAL_AMFLAGS = -I m4
 
 EXTRA_DIST += \
-	nm-openconnect-service.name.in \
-	nm-openconnect-sysusers.conf.in \
+	nm-gpclient-service.name.in \
+	nm-gpclient-sysusers.conf.in \
 	$(nmopenconnectsysusers_DATA) \
 	$(dbusservice_DATA) \
 	$(desktop_in_files) \
 	$(icon_DATA) \
-	$(appdata_in_files) \
-	$(appdata_files) \
-	intltool-extract.in \
-	intltool-merge.in \
-	intltool-update.in \
 	openconnect-strings.txt \
 	\
 	shared/README \

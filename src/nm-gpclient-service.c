@@ -24,7 +24,7 @@
 
 #include "nm-default.h"
 
-#include "nm-openconnect-service.h"
+#include "nm-gpclient-service.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -35,6 +35,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <ctype.h>
+#include <dirent.h>
 #include <sys/ioctl.h>
 #include <linux/if_tun.h>
 #include <net/if.h>
@@ -54,22 +56,70 @@ G_DEFINE_TYPE (NMOpenconnectPlugin, nm_openconnect_plugin, NM_TYPE_VPN_SERVICE_P
 typedef struct {
 	GPid pid;
 	char *tun_name;
+	gboolean disconnect_requested;
 } NMOpenconnectPluginPrivate;
 
 #define NM_OPENCONNECT_PLUGIN_GET_PRIVATE(o) (G_TYPE_INSTANCE_GET_PRIVATE ((o), NM_TYPE_OPENCONNECT_PLUGIN, NMOpenconnectPluginPrivate))
 
-static const char *openconnect_binary_paths[] =
+static const char *gpclient_binary_paths[] =
 {
-	"/usr/bin/openconnect",
-	"/usr/sbin/openconnect",
-	"/usr/local/bin/openconnect",
-	"/usr/local/sbin/openconnect",
-	"/opt/bin/openconnect",
-	"/opt/sbin/openconnect",
+	"/usr/bin/gpclient",
+	"/usr/local/bin/gpclient",
+	"/opt/bin/gpclient",
 	NULL
 };
 
-#define NM_OPENCONNECT_HELPER_PATH LIBEXECDIR"/nm-openconnect-service-openconnect-helper"
+#define NM_GPCLIENT_HELPER_PATH LIBEXECDIR"/nm-gpclient-service-helper"
+
+static gboolean
+gpclient_supports_connect_arg (const char *binary, const char *arg)
+{
+	static GHashTable *help_cache = NULL;
+	char **argv;
+	char *help_text = NULL;
+	GError *error = NULL;
+	gint exit_status = 0;
+	gboolean ok;
+	gboolean supported;
+
+	if (!help_cache)
+		help_cache = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+
+	help_text = g_hash_table_lookup (help_cache, binary);
+	if (!help_text) {
+		argv = g_new0 (char *, 4);
+		argv[0] = g_strdup (binary);
+		argv[1] = g_strdup ("connect");
+		argv[2] = g_strdup ("--help");
+
+		ok = g_spawn_sync (NULL,
+		                   argv,
+		                   NULL,
+		                   G_SPAWN_DEFAULT,
+		                   NULL,
+		                   NULL,
+		                   &help_text,
+		                   NULL,
+		                   &exit_status,
+		                   &error);
+		g_strfreev (argv);
+
+		if (!ok) {
+			g_warning ("failed to inspect gpclient options: %s", error->message);
+			g_clear_error (&error);
+			return FALSE;
+		}
+		if (!WIFEXITED (exit_status) || WEXITSTATUS (exit_status) != 0) {
+			g_free (help_text);
+			return FALSE;
+		}
+
+		g_hash_table_insert (help_cache, g_strdup (binary), help_text);
+	}
+
+	supported = help_text && g_strstr_len (help_text, -1, arg);
+	return supported;
+}
 
 typedef struct {
 	const char *name;
@@ -86,6 +136,10 @@ static const ValidProperty valid_properties[] = {
 	{ NM_OPENCONNECT_KEY_PRIVKEY,     G_TYPE_STRING, 0, 0 },
 	{ NM_OPENCONNECT_KEY_KEY_PASS,    G_TYPE_STRING, 0, 0 },
 	{ NM_OPENCONNECT_KEY_MTU,         G_TYPE_STRING, 0, 0 },
+	{ NM_OPENCONNECT_KEY_CLIENT_VERSION, G_TYPE_STRING, 0, 0 },
+	{ NM_OPENCONNECT_KEY_HOST_ID,     G_TYPE_STRING, 0, 0 },
+	{ NM_OPENCONNECT_KEY_FIX_OPENSSL, G_TYPE_BOOLEAN, 0, 0 },
+	{ NM_OPENCONNECT_KEY_IGNORE_TLS_ERRORS, G_TYPE_BOOLEAN, 0, 0 },
 	{ NM_OPENCONNECT_KEY_PEM_PASSPHRASE_FSID, G_TYPE_BOOLEAN, 0, 0 },
 	{ NM_OPENCONNECT_KEY_PREVENT_INVALID_CERT, G_TYPE_BOOLEAN, 0, 0 },
 	{ NM_OPENCONNECT_KEY_DISABLE_UDP, G_TYPE_BOOLEAN, 0, 0 },
@@ -129,7 +183,7 @@ static struct {
 #define _NMLOG(level, ...) \
 	G_STMT_START { \
 		if (gl.log_level >= (level)) { \
-			g_print ("nm-openconnect[%ld] %-7s " _NM_UTILS_MACRO_FIRST (__VA_ARGS__) "\n", \
+			g_print ("nm-gpclient[%ld] %-7s " _NM_UTILS_MACRO_FIRST (__VA_ARGS__) "\n", \
 			         (long) getpid (), \
 			         nm_utils_syslog_to_str (level) \
 			         _NM_UTILS_MACRO_REST (__VA_ARGS__)); \
@@ -253,6 +307,49 @@ nm_openconnect_secrets_validate (NMSettingVpn *s_vpn, GError **error)
 	return *error ? FALSE : TRUE;
 }
 
+static char **
+build_gpclient_env (NMSettingConnection *s_con)
+{
+	guint32 i;
+	guint32 n_permissions;
+	struct passwd *pw = NULL;
+	char uid_buf[32];
+	char gid_buf[32];
+	char **envp;
+
+	if (geteuid () != 0 || !s_con)
+		return NULL;
+
+	n_permissions = nm_setting_connection_get_num_permissions (s_con);
+	for (i = 0; i < n_permissions; i++) {
+		const char *ptype = NULL;
+		const char *pitem = NULL;
+
+		if (!nm_setting_connection_get_permission (s_con, i, &ptype, &pitem, NULL))
+			continue;
+		if (ptype && !strcmp (ptype, "user") && pitem && pitem[0]) {
+			pw = getpwnam (pitem);
+			break;
+		}
+	}
+	if (!pw)
+		return NULL;
+
+	g_snprintf (uid_buf, sizeof (uid_buf), "%lu", (unsigned long) pw->pw_uid);
+	g_snprintf (gid_buf, sizeof (gid_buf), "%lu", (unsigned long) pw->pw_gid);
+
+	envp = g_get_environ ();
+	envp = g_environ_setenv (envp, "SUDO_UID", uid_buf, TRUE);
+	envp = g_environ_setenv (envp, "SUDO_GID", gid_buf, TRUE);
+	envp = g_environ_setenv (envp, "SUDO_USER", pw->pw_name, TRUE);
+
+	_LOGI ("gpclient will use desktop user %s (%lu) for any helper auth",
+	       pw->pw_name,
+	       (unsigned long) pw->pw_uid);
+
+	return envp;
+}
+
 static char *
 create_persistent_tundev(const char *suggested_name, GError **error)
 {
@@ -296,22 +393,22 @@ create_persistent_tundev(const char *suggested_name, GError **error)
 			             IFNAMSIZ, ifr.ifr_name);
 			return NULL;
 		}
-	} else {
-		for (i = 0; i < 256; i++) {
-			sprintf(ifr.ifr_name, "vpn%d", i);
+		} else {
+			for (i = 0; i < 256; i++) {
+				sprintf(ifr.ifr_name, "vpn%d", i);
 
-			if (!ioctl(fd, TUNSETIFF, (void *)&ifr))
-				break;
-		}
-		if (i == 256) {
+				if (!ioctl(fd, TUNSETIFF, (void *)&ifr))
+					break;
+			}
+			if (i == 256) {
 			g_set_error (error,
 			             NM_VPN_PLUGIN_ERROR,
 			             NM_VPN_PLUGIN_ERROR_LAUNCH_FAILED,
 			             "%s",
 			             _("Could not create tunnel interface named 'vpnX', for X in 0..255"));
-			return NULL;
+				return NULL;
+			}
 		}
-	}
 
 	if (ioctl(fd, TUNSETOWNER, gl.tun_owner) < 0) {
 		perror("TUNSETOWNER");
@@ -346,7 +443,7 @@ destroy_persistent_tundev(char *tun_name)
 	fd = open("/dev/net/tun", O_RDWR);
 	if (fd < 0) {
 		perror("open /dev/net/tun");
-		exit(EXIT_FAILURE);
+		return;
 	}
 
 	memset(&ifr, 0, sizeof(ifr));
@@ -355,25 +452,28 @@ destroy_persistent_tundev(char *tun_name)
 
 	if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0) {
 		perror("TUNSETIFF");
-		exit(EXIT_FAILURE);
+		close(fd);
+		return;
 	}
 
 	if (ioctl(fd, TUNSETPERSIST, 0)) {
 		perror("TUNSETPERSIST");
-		exit(EXIT_FAILURE);
+		close(fd);
+		return;
 	}
 	_LOGW ("Destroyed  tundev %s\n", tun_name);
 	close(fd);
 }
 
-static void openconnect_drop_child_privs(gpointer user_data)
+static void
+gpclient_drop_child_privs(gpointer user_data)
 {
 	char *tun_name = user_data;
 
 	if (tun_name) {
 		if (initgroups (NM_OPENCONNECT_USER, gl.tun_group) ||
 		    setgid (gl.tun_group) || setuid (gl.tun_owner)) {
-			_LOGW ("Failed to drop privileges when spawning openconnect");
+			_LOGW ("Failed to drop privileges when spawning gpclient");
 			exit (1);
 		}
 	}
@@ -385,28 +485,40 @@ openconnect_watch_cb (GPid pid, gint status, gpointer user_data)
 	NMOpenconnectPlugin *plugin = NM_OPENCONNECT_PLUGIN (user_data);
 	NMOpenconnectPluginPrivate *priv = NM_OPENCONNECT_PLUGIN_GET_PRIVATE (plugin);
 	guint error = 0;
+	gboolean disconnect_requested = priv->disconnect_requested;
 
-	if (WIFEXITED (status)) {
+	if (disconnect_requested) {
+		if (WIFEXITED (status))
+			_LOGI ("gpclient exited after requested disconnect with code %d", WEXITSTATUS (status));
+		else if (WIFSIGNALED (status))
+			_LOGI ("gpclient stopped after requested disconnect with signal %d", WTERMSIG (status));
+		else
+			_LOGI ("gpclient stopped after requested disconnect");
+	} else if (WIFEXITED (status)) {
 		error = WEXITSTATUS (status);
 		if (error != 0)
-			_LOGW ("openconnect exited with error code %d", error);
+			_LOGW ("gpclient exited with error code %d", error);
 	}
 	else if (WIFSTOPPED (status))
-		_LOGW ("openconnect stopped unexpectedly with signal %d", WSTOPSIG (status));
+		_LOGW ("gpclient stopped unexpectedly with signal %d", WSTOPSIG (status));
 	else if (WIFSIGNALED (status))
-		_LOGW ("openconnect died with signal %d", WTERMSIG (status));
+		_LOGW ("gpclient died with signal %d", WTERMSIG (status));
 	else
-		_LOGW ("openconnect died from an unknown cause");
+		_LOGW ("gpclient died from an unknown cause");
 
 	/* Reap child if needed. */
-	waitpid (priv->pid, NULL, WNOHANG);
+	waitpid (pid, NULL, WNOHANG);
 	priv->pid = 0;
+	priv->disconnect_requested = FALSE;
 
 	if (priv->tun_name) {
 		destroy_persistent_tundev (priv->tun_name);
 		g_free (priv->tun_name);
 		priv->tun_name = NULL;
 	}
+
+	if (disconnect_requested)
+		return;
 
 	/* Must be after data->state is set since signals use data->state */
 	switch (error) {
@@ -432,38 +544,46 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 {
 	NMOpenconnectPluginPrivate *priv = NM_OPENCONNECT_PLUGIN_GET_PRIVATE (plugin);
 	GPid pid;
-	const char **openconnect_binary = NULL;
-	GPtrArray *openconnect_argv;
-	GSource *openconnect_watch;
-	gint stdin_fd;
-	char csd_user_arg[60];
-	const char *props_vpn_gw, *props_cookie, *props_cacert, *props_mtu, *props_gwcert, *props_proxy;
-	const char *props_csd_enable, *props_csd_wrapper, *props_resolve;
-	const char *props_disable_udp;
-	const char *protocol;
+	const char **gpclient_binary = NULL;
+	GPtrArray *gpclient_argv;
+	GSource *gpclient_watch;
+	gint stdin_fd = -1;
+	gboolean use_cookie;
+	char **envp = NULL;
+	const char *props_portal, *props_vpn_gw, *props_cookie, *props_mtu;
+	const char *props_csd_enable, *props_csd_wrapper;
+	const char *props_no_dtls, *props_disable_udp, *props_auto_gateway, *props_as_gateway;
+	const char *props_cert, *props_sslkey, *props_key_pass;
+	const char *props_client_version, *props_reported_os, *props_fix_openssl, *props_ignore_tls, *props_browser;
 	const char *props_tun_name;
+	const char *connect_server;
 
-	/* Find openconnect */
-	openconnect_binary = openconnect_binary_paths;
-	while (*openconnect_binary != NULL) {
-		if (g_file_test (*openconnect_binary, G_FILE_TEST_EXISTS))
+	/* Find gpclient */
+	gpclient_binary = gpclient_binary_paths;
+	while (*gpclient_binary != NULL) {
+		if (g_file_test (*gpclient_binary, G_FILE_TEST_EXISTS))
 			break;
-		openconnect_binary++;
+		gpclient_binary++;
 	}
 
-	if (!*openconnect_binary) {
+	if (!*gpclient_binary) {
 		g_set_error (error,
 		             NM_VPN_PLUGIN_ERROR,
 		             NM_VPN_PLUGIN_ERROR_LAUNCH_FAILED,
 		             "%s",
-		             _("Could not find openconnect binary."));
+		             _("Could not find gpclient binary."));
 		return -1;
 	}
 
-	/* The actual gateway to use (after redirection) comes from the auth
-	   dialog, so it's in the secrets hash not the properties */
+	props_portal = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_PORTAL);
 	props_vpn_gw = nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_GATEWAY);
-	if (!props_vpn_gw || !strlen (props_vpn_gw) ) {
+	if (!props_vpn_gw || !strlen (props_vpn_gw))
+		props_vpn_gw = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_GATEWAY);
+
+	props_auto_gateway = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_AUTO_GATEWAY);
+	props_as_gateway = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_AS_GATEWAY);
+	if ((!props_vpn_gw || !strlen (props_vpn_gw)) &&
+	    (!props_portal || !strlen (props_portal))) {
 		g_set_error (error,
 		             NM_VPN_PLUGIN_ERROR,
 		             NM_VPN_PLUGIN_ERROR_LAUNCH_FAILED,
@@ -473,141 +593,158 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 	}
 
 	props_cookie = nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_COOKIE);
-	if (!props_cookie || !strlen (props_cookie)) {
+	use_cookie = props_cookie && strlen (props_cookie);
+	if (!use_cookie) {
 		g_set_error (error,
 		             NM_VPN_PLUGIN_ERROR,
 		             NM_VPN_PLUGIN_ERROR_LAUNCH_FAILED,
 		             "%s",
-		             _("No WebVPN cookie provided."));
+		             _("No gpclient authentication JSON provided."));
 		return -1;
 	}
-	props_gwcert = nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_GWCERT);
-	props_resolve = nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_RESOLVE);
 
-	props_cacert = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_CACERT);
 	props_mtu = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_MTU);
+	props_cert = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_USERCERT);
+	props_sslkey = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_PRIVKEY);
+	props_key_pass = nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_KEY_PASS);
+	if (!props_key_pass || !strlen (props_key_pass))
+		props_key_pass = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_KEY_PASS);
+	props_client_version = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_CLIENT_VERSION);
+	props_reported_os = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_REPORTED_OS);
+	props_fix_openssl = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_FIX_OPENSSL);
+	props_ignore_tls = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_IGNORE_TLS_ERRORS);
+	props_browser = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_BROWSER);
+	envp = build_gpclient_env (s_con);
 
-	props_proxy = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_PROXY);
+	connect_server = (props_portal && strlen (props_portal)) ? props_portal : props_vpn_gw;
 
-	openconnect_argv = g_ptr_array_new ();
-	g_ptr_array_add (openconnect_argv, (gpointer) (*openconnect_binary));
-
-	protocol = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_PROTOCOL);
-	if (protocol && strcmp (protocol, "anyconnect")) {
-		/* Special case for OpenConnect 7.06 which had --juniper but not --protocol */
-		if (!strcmp (protocol, "juniper"))
-			g_ptr_array_add (openconnect_argv, (gpointer) "--juniper");
-		else {
-			g_ptr_array_add (openconnect_argv, (gpointer) "--protocol");
-			g_ptr_array_add (openconnect_argv, (gpointer) protocol);
-		}
+	gpclient_argv = g_ptr_array_new ();
+	g_ptr_array_add (gpclient_argv, (gpointer) (*gpclient_binary));
+	if (props_fix_openssl && !strcmp (props_fix_openssl, "yes"))
+		g_ptr_array_add (gpclient_argv, (gpointer) "--fix-openssl");
+	if (props_ignore_tls && !strcmp (props_ignore_tls, "yes"))
+		g_ptr_array_add (gpclient_argv, (gpointer) "--ignore-tls-errors");
+	g_ptr_array_add (gpclient_argv, (gpointer) "connect");
+	g_ptr_array_add (gpclient_argv, (gpointer) connect_server);
+	g_ptr_array_add (gpclient_argv, (gpointer) "--cookie-on-stdin");
+	if (props_browser && strlen (props_browser)) {
+		g_ptr_array_add (gpclient_argv, (gpointer) "--browser");
+		g_ptr_array_add (gpclient_argv, (gpointer) props_browser);
 	}
 
-	if (props_gwcert && strlen(props_gwcert)) {
-		g_ptr_array_add (openconnect_argv, (gpointer) "--servercert");
-		g_ptr_array_add (openconnect_argv, (gpointer) props_gwcert);
-	} else if (props_cacert && strlen(props_cacert)) {
-		g_ptr_array_add (openconnect_argv, (gpointer) "--cafile");
-		g_ptr_array_add (openconnect_argv, (gpointer) props_cacert);
+	if (props_portal && strlen (props_portal)) {
+		if (props_auto_gateway && !strcmp (props_auto_gateway, "yes")) {
+			if (gpclient_supports_connect_arg (*gpclient_binary, "--auto-gateway")) {
+				g_ptr_array_add (gpclient_argv, (gpointer) "--auto-gateway");
+			} else {
+				_LOGI ("gpclient does not support --auto-gateway; using portal-only connect");
+			}
+		} else if (props_vpn_gw && strlen (props_vpn_gw)) {
+			g_ptr_array_add (gpclient_argv, (gpointer) "--gateway");
+			g_ptr_array_add (gpclient_argv, (gpointer) props_vpn_gw);
+		}
+	} else if (props_as_gateway && !strcmp (props_as_gateway, "yes")) {
+		g_ptr_array_add (gpclient_argv, (gpointer) "--as-gateway");
 	}
 
 	if (props_mtu && strlen(props_mtu)) {
-		g_ptr_array_add (openconnect_argv, (gpointer) "--mtu");
-		g_ptr_array_add (openconnect_argv, (gpointer) props_mtu);
+		g_ptr_array_add (gpclient_argv, (gpointer) "--mtu");
+		g_ptr_array_add (gpclient_argv, (gpointer) props_mtu);
 	}
 
-	if (props_proxy && strlen(props_proxy)) {
-		g_ptr_array_add (openconnect_argv, (gpointer) "--proxy");
-		g_ptr_array_add (openconnect_argv, (gpointer) props_proxy);
+	if (props_cert && strlen(props_cert)) {
+		g_ptr_array_add (gpclient_argv, (gpointer) "--certificate");
+		g_ptr_array_add (gpclient_argv, (gpointer) props_cert);
 	}
 
-	g_ptr_array_add (openconnect_argv, (gpointer) "--syslog");
-	g_ptr_array_add (openconnect_argv, (gpointer) "--cookie-on-stdin");
+	if (props_sslkey && strlen(props_sslkey)) {
+		g_ptr_array_add (gpclient_argv, (gpointer) "--sslkey");
+		g_ptr_array_add (gpclient_argv, (gpointer) props_sslkey);
+	}
 
-	g_ptr_array_add (openconnect_argv, (gpointer) "--script");
-	g_ptr_array_add (openconnect_argv, (gpointer) NM_OPENCONNECT_HELPER_PATH);
+	if (props_key_pass && strlen(props_key_pass)) {
+		g_ptr_array_add (gpclient_argv, (gpointer) "--key-password");
+		g_ptr_array_add (gpclient_argv, (gpointer) props_key_pass);
+	}
+
+	if (props_client_version && strlen(props_client_version)) {
+		g_ptr_array_add (gpclient_argv, (gpointer) "--client-version");
+		g_ptr_array_add (gpclient_argv, (gpointer) props_client_version);
+	}
+
+	if (props_reported_os && strlen(props_reported_os)) {
+		g_ptr_array_add (gpclient_argv, (gpointer) "--os");
+		g_ptr_array_add (gpclient_argv, (gpointer) props_reported_os);
+	}
+
+	g_ptr_array_add (gpclient_argv, (gpointer) "--script");
+	g_ptr_array_add (gpclient_argv, (gpointer) NM_GPCLIENT_HELPER_PATH);
 
 	props_tun_name = nm_setting_connection_get_interface_name(s_con);
 	priv->tun_name = create_persistent_tundev (props_tun_name, error);
 	if (!priv->tun_name && *error)
 		return -1;
 	else if (priv->tun_name) {
-		g_ptr_array_add (openconnect_argv, (gpointer) "--interface");
-		g_ptr_array_add (openconnect_argv, (gpointer) priv->tun_name);
+		g_ptr_array_add (gpclient_argv, (gpointer) "--interface");
+		g_ptr_array_add (gpclient_argv, (gpointer) priv->tun_name);
 	} else {
 		/* TODO: Is this a valid case? See create_persistent_tundev. */
 	}
 
+	props_no_dtls = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_NO_DTLS);
 	props_disable_udp = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_DISABLE_UDP);
-	if (props_disable_udp && !strcmp (props_disable_udp, "yes")) {
-		/* May be renamed to --no-udp in the future, but with --no-dtls kept for backwards-
-		 * compatibility (see https://gitlab.com/openconnect/openconnect/-/merge_requests/151) */
-		g_ptr_array_add (openconnect_argv, (gpointer) "--no-dtls");
+	if ((props_no_dtls && !strcmp (props_no_dtls, "yes")) ||
+	    (props_disable_udp && !strcmp (props_disable_udp, "yes"))) {
+		g_ptr_array_add (gpclient_argv, (gpointer) "--no-dtls");
 	}
 
 	props_csd_enable = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_CSD_ENABLE);
 	props_csd_wrapper = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_CSD_WRAPPER);
 	if (props_csd_enable && !strcmp (props_csd_enable, "yes") && props_csd_wrapper) {
-		/* TODO: disable passing the script to openconnect.
-		 *
-		 * As we have priv->tun_name, openconnect will run as an unprivileged user NM_OPENCONNECT_USER.
-		 * However, it is still not safe to run untrusted scripts provided by the user.
-		 *
-		 * This needs a different solution, for now, just log a warning. */
-		if (FALSE && priv->tun_name) {
-			/* Replicate the CSD parameters used in the authentication phase, for
-			   supported protocols which may need to invoke the security trojan ("CSD")
-			   in the tunnel/connection phase. */
-			g_ptr_array_add (openconnect_argv, (gpointer) "--csd-wrapper");
-			g_ptr_array_add (openconnect_argv, (gpointer) props_csd_wrapper);
-			g_ptr_array_add (openconnect_argv, (gpointer) "--csd-user");
-			g_ptr_array_add (openconnect_argv, (gpointer) nm_sprintf_buf (csd_user_arg, "%d", gl.tun_owner));
-		} else {
-			_LOGW ("openconnect won't call csd-wrapper script because it cannot drop privileges to user \"%s\"",
-			       NM_OPENCONNECT_USER);
+		g_ptr_array_add (gpclient_argv, (gpointer) "--hip");
+		if (strlen (props_csd_wrapper)) {
+			g_ptr_array_add (gpclient_argv, (gpointer) props_csd_wrapper);
 		}
 	}
 
-	g_ptr_array_add (openconnect_argv, (gpointer) props_vpn_gw);
-
-	if (props_resolve && strlen(props_resolve)) {
-		g_ptr_array_add (openconnect_argv, (gpointer) "--resolve");
-		g_ptr_array_add (openconnect_argv, (gpointer) props_resolve);
-	}
-
 	if (gl.log_level >= LOG_INFO) {
-		g_ptr_array_add (openconnect_argv, (gpointer) "--verbose");
+		g_ptr_array_add (gpclient_argv, (gpointer) "--verbose");
 		if (gl.log_level >= LOG_DEBUG)
-			g_ptr_array_add (openconnect_argv, (gpointer) "--verbose");
+			g_ptr_array_add (gpclient_argv, (gpointer) "--verbose");
 	}
 
-	g_ptr_array_add (openconnect_argv, NULL);
+	g_ptr_array_add (gpclient_argv, NULL);
 
-	if (!g_spawn_async_with_pipes (NULL, (char **) openconnect_argv->pdata, NULL,
+	if (!g_spawn_async_with_pipes (NULL, (char **) gpclient_argv->pdata, envp,
 	                               G_SPAWN_DO_NOT_REAP_CHILD,
-	                               openconnect_drop_child_privs, priv->tun_name,
-	                               &pid, &stdin_fd, NULL, NULL, error)) {
-		g_ptr_array_free (openconnect_argv, TRUE);
-		_LOGW ("openconnect failed to start.  error: '%s'", (*error)->message);
+	                               gpclient_drop_child_privs, priv->tun_name,
+	                               &pid, use_cookie ? &stdin_fd : NULL, NULL, NULL, error)) {
+		g_ptr_array_free (gpclient_argv, TRUE);
+		g_strfreev (envp);
+		_LOGW ("gpclient failed to start.  error: '%s'", (*error)->message);
 		return -1;
 	}
-	g_ptr_array_free (openconnect_argv, TRUE);
+	g_ptr_array_free (gpclient_argv, TRUE);
+	g_strfreev (envp);
 
-	_LOGI ("openconnect started with pid %d", pid);
+	_LOGI ("gpclient started with pid %d", pid);
 
-	if (write(stdin_fd, props_cookie, strlen(props_cookie)) != strlen(props_cookie) ||
-	    write(stdin_fd, "\n", 1) != 1) {
-		_LOGW ("openconnect didn't eat the cookie we fed it");
-		return -1;
+	if (use_cookie) {
+		if (write(stdin_fd, props_cookie, strlen(props_cookie)) != strlen(props_cookie) ||
+		    write(stdin_fd, "\n", 1) != 1) {
+			_LOGW ("gpclient didn't read the authentication JSON we fed it");
+			return -1;
+		}
+
+		close(stdin_fd);
 	}
-
-	close(stdin_fd);
 
 	NM_OPENCONNECT_PLUGIN_GET_PRIVATE (plugin)->pid = pid;
-	openconnect_watch = g_child_watch_source_new (pid);
-	g_source_set_callback (openconnect_watch, (GSourceFunc) openconnect_watch_cb, plugin, NULL);
-	g_source_attach (openconnect_watch, NULL);
-	g_source_unref (openconnect_watch);
+	NM_OPENCONNECT_PLUGIN_GET_PRIVATE (plugin)->disconnect_requested = FALSE;
+	gpclient_watch = g_child_watch_source_new (pid);
+	g_source_set_callback (gpclient_watch, (GSourceFunc) openconnect_watch_cb, plugin, NULL);
+	g_source_attach (gpclient_watch, NULL);
+	g_source_unref (gpclient_watch);
 
 	return 0;
 }
@@ -663,18 +800,17 @@ real_need_secrets (NMVpnServicePlugin *plugin,
 		return FALSE;
 	}
 
-	/* We just need the WebVPN cookie, and the final IP address of the gateway
-	   (after HTTP redirects, which do happen). All the certificate/SecurID
-	   nonsense can be handled for us, in the user's context, by auth-dialog */
-	if (!nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_GATEWAY)) {
+	/* The auth layer should provide gpclient's JSON auth result as the
+	 * cookie secret. The target gateway is optional for portal-mode
+	 * connections; without one, gpclient performs its native portal/gateway
+	 * handling. */
+	if (!nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_GATEWAY) &&
+	    !nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_GATEWAY) &&
+	    !nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_PORTAL)) {
 		*setting_name = NM_SETTING_VPN_SETTING_NAME;
 		return TRUE;
 	}
 	if (!nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_COOKIE)) {
-		*setting_name = NM_SETTING_VPN_SETTING_NAME;
-		return TRUE;
-	}
-	if (!nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_GWCERT)) {
 		*setting_name = NM_SETTING_VPN_SETTING_NAME;
 		return TRUE;
 	}
@@ -699,13 +835,13 @@ real_disconnect (NMVpnServicePlugin   *plugin,
 	NMOpenconnectPluginPrivate *priv = NM_OPENCONNECT_PLUGIN_GET_PRIVATE (plugin);
 
 	if (priv->pid) {
+		priv->disconnect_requested = TRUE;
 		if (kill (priv->pid, SIGINT) == 0)
 			g_timeout_add (2000, ensure_killed, GINT_TO_POINTER (priv->pid));
 		else
 			kill (priv->pid, SIGKILL);
 
-		_LOGI ("Terminated openconnect daemon with PID %d.", priv->pid);
-		priv->pid = 0;
+		_LOGI ("Terminated gpclient daemon with PID %d.", priv->pid);
 	}
 
 	return TRUE;
@@ -809,8 +945,8 @@ int main (int argc, char *argv[])
 	g_option_context_add_main_entries (opt_ctx, options, NULL);
 
 	g_option_context_set_summary (opt_ctx,
-	                              _("nm-openconnect-service provides integrated "
-	                                "Cisco AnyConnect SSL VPN capability to NetworkManager."));
+	                              _("nm-gpclient-service provides integrated "
+	                                "GlobalProtect gpclient VPN capability to NetworkManager."));
 
 	g_option_context_parse (opt_ctx, &argc, &argv, NULL);
 	g_option_context_free (opt_ctx);
@@ -826,7 +962,7 @@ int main (int argc, char *argv[])
 	setenv ("NM_VPN_LOG_LEVEL", nm_sprintf_buf (sbuf, "%d", gl.log_level), TRUE);
 	setenv ("NM_VPN_LOG_PREFIX_TOKEN", nm_sprintf_buf (sbuf, "%ld", (long) getpid ()), TRUE);
 
-	_LOGD ("nm-openconnect-service (version " DIST_VERSION ") starting...");
+	_LOGD ("nm-gpclient-service (version " DIST_VERSION ") starting...");
 
 	if (system ("/sbin/modprobe tun") == -1)
 		exit (EXIT_FAILURE);

@@ -1,0 +1,12 @@
+[VPN Connection]
+name=gpclient
+service=org.freedesktop.NetworkManager.gpclient
+program=@LIBEXECDIR@/nm-gpclient-service
+supports-multiple-connections=true
+
+[libnm]
+plugin=@PLUGINDIR@/libnm-vpn-plugin-gpclient.so
+
+[GNOME]
+auth-dialog=@LIBEXECDIR@/nm-gpclient-auth-dialog
+properties=libnm-gpclient-properties

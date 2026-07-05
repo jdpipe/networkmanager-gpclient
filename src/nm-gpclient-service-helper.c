@@ -31,6 +31,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <syslog.h>
 
 #include "nm-utils/nm-shared-utils.h"
 #include "nm-utils/nm-vpn-plugin-macros.h"
@@ -49,7 +50,7 @@ static struct {
 #define _NMLOG(level, ...) \
 	G_STMT_START { \
 		if (gl.log_level >= (level)) { \
-			g_print ("nm-openconnect[%s] %-7s [helper-%ld] " _NM_UTILS_MACRO_FIRST (__VA_ARGS__) "\n", \
+			g_print ("nm-gpclient[%s] %-7s [helper-%ld] " _NM_UTILS_MACRO_FIRST (__VA_ARGS__) "\n", \
 			         gl.log_prefix_token, \
 			         nm_utils_syslog_to_str (level), \
 			         (long) getpid () \
@@ -73,7 +74,7 @@ helper_failed (GDBusProxy *proxy, const char *reason)
 {
 	GError *err = NULL;
 
-	_LOGW ("nm-nopenconnect-service-openconnect-helper did not receive a valid %s from openconnect", reason);
+	_LOGW ("nm-gpclient-service-helper did not receive a valid %s from gpclient", reason);
 
 	if (!g_dbus_proxy_call_sync (proxy, "SetFailure",
 	                             g_variant_new ("(s)", reason),
@@ -87,41 +88,53 @@ helper_failed (GDBusProxy *proxy, const char *reason)
 	exit (1);
 }
 
-static void
+static gboolean
 send_config (GDBusProxy *proxy, GVariant *config,
              GVariant *ip4config, GVariant *ip6config)
 {
 	GError *err = NULL;
 
+	_LOGD ("sending SetConfig to NetworkManager VPN service");
 	if (!g_dbus_proxy_call_sync (proxy, "SetConfig",
 	                             g_variant_new ("(*)", config),
 	                             G_DBUS_CALL_FLAGS_NONE, -1,
 	                             NULL,
 	                             &err))
 		goto error;
+	_LOGD ("SetConfig accepted");
 
 	if (ip4config) {
+		_LOGD ("sending SetIp4Config to NetworkManager VPN service");
 		if (!g_dbus_proxy_call_sync (proxy, "SetIp4Config",
 	                                     g_variant_new ("(*)", ip4config),
 		                             G_DBUS_CALL_FLAGS_NONE, -1,
 		                             NULL,
 		                             &err))
 			goto error;
+		_LOGD ("SetIp4Config accepted");
+	} else {
+		_LOGD ("no IPv4 config to send");
 	}
 
 	if (ip6config) {
+		_LOGD ("sending SetIp6Config to NetworkManager VPN service");
 		if (!g_dbus_proxy_call_sync (proxy, "SetIp6Config",
 	                                     g_variant_new ("(*)", ip6config),
 		                             G_DBUS_CALL_FLAGS_NONE, -1,
 		                             NULL,
 		                             &err))
 			goto error;
+		_LOGD ("SetIp6Config accepted");
+	} else {
+		_LOGD ("no IPv6 config to send");
 	}
 
-	return;
+	return TRUE;
 error:
+	syslog (LOG_WARNING, "could not send configuration information: %s", err->message);
 	_LOGW ("Could not send configuration information: %s", err->message);
 	g_error_free (err);
+	return FALSE;
 }
 
 
@@ -462,7 +475,7 @@ get_ip6_routes (gboolean *defaultroute)
 }
 
 /*
- * Environment variables passed back from 'openconnect':
+ * Environment variables passed back from gpclient's OpenConnect script hook:
  *
  * VPNGATEWAY             -- vpn gateway address (always present)
  * TUNDEV                 -- tunnel device (always present)
@@ -499,6 +512,12 @@ main (int argc, char *argv[])
 	                                             10, 0, LOG_DEBUG,
 	                                             LOG_NOTICE);
 	gl.log_prefix_token = getenv ("NM_VPN_LOG_PREFIX_TOKEN") ?: "???";
+	openlog ("nm-gpclient-helper", LOG_PID, LOG_DAEMON);
+
+	_LOGD ("started reason=%s bus=%s tundev=%s",
+	       getenv ("reason") ?: "(unset)",
+	       getenv ("NM_DBUS_SERVICE_OPENCONNECT") ?: NM_DBUS_SERVICE_OPENCONNECT,
+	       getenv ("TUNDEV") ?: "(unset)");
 
 	if (_LOGD_enabled ()) {
 		GString *args;
@@ -521,16 +540,19 @@ main (int argc, char *argv[])
 			_LOGD ("environment: %s", *iter);
 	}
 
-	/* openconnect gives us a "reason" code.  If we are given one,
+	/* gpclient/OpenConnect gives us a "reason" code.  If we are given one,
 	 * don't proceed unless its "connect".
 	 */
 	tmp = getenv ("reason");
-	if (tmp && strcmp (tmp, "connect") != 0)
+	if (tmp && strcmp (tmp, "connect") != 0) {
+		_LOGD ("ignoring helper invocation for reason=%s", tmp);
 		exit (0);
+	}
 
 	bus_path = getenv ("NM_DBUS_SERVICE_OPENCONNECT");
 	if (!bus_path)
 		bus_path = NM_DBUS_SERVICE_OPENCONNECT;
+	_LOGD ("creating D-Bus proxy for bus name %s", bus_path);
 
 	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
 	                                       G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES,
@@ -540,6 +562,7 @@ main (int argc, char *argv[])
 	                                       NM_VPN_DBUS_PLUGIN_INTERFACE,
 	                                       NULL, &err);
 	if (!proxy) {
+		syslog (LOG_WARNING, "could not create D-Bus proxy: %s", err->message);
 		_LOGW ("Could not create a D-Bus proxy: %s", err->message);
 		g_error_free (err);
 		exit (1);
@@ -742,8 +765,12 @@ main (int argc, char *argv[])
 		ip6config = NULL;
 	}
 
-	/* Send the config info to nm-openconnect-service */
-	send_config (proxy, g_variant_builder_end (&builder), ip4config, ip6config);
+	/* Send the config info to nm-gpclient-service */
+	if (!send_config (proxy, g_variant_builder_end (&builder), ip4config, ip6config)) {
+		g_object_unref (proxy);
+		exit (1);
+	}
+	_LOGD ("completed NetworkManager VPN config handoff");
 
 	g_object_unref (proxy);
 

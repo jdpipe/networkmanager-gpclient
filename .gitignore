@@ -37,5 +37,10 @@ nm-openconnect-sysusers.conf
 src/nm-openconnect-service
 src/nm-openconnect-service-openconnect-helper
 auth-dialog/nm-openconnect-auth-dialog
+nm-gpclient-service.name
+nm-gpclient-sysusers.conf
+src/nm-gpclient-service
+src/nm-gpclient-service-helper
+auth-dialog/nm-gpclient-auth-dialog
 
 /NetworkManager-openconnect*.tar*
