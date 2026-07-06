@@ -2,7 +2,7 @@
 
 `NetworkManager-gpclient` is a prototype NetworkManager VPN plugin for
 GlobalProtect VPNs that are handled by
-[`gpclient`](https://github.com/yuezk/GlobalProtect-openconnect).
+[GlobalProtect-openconnect](https://github.com/yuezk/GlobalProtect-openconnect) aka `gpclient`.
 
 It adds a `GlobalProtect (gpclient)` VPN type to NetworkManager-compatible
 editors and lets NetworkManager start, stop, and monitor a `gpclient` VPN
