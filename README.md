@@ -7,7 +7,7 @@ GlobalProtect VPNs that are handled by
 It adds a `GlobalProtect (gpclient)` VPN type to NetworkManager-compatible
 editors and lets NetworkManager start, stop, and monitor a `gpclient` VPN
 session. The intent is to make day-to-day use feel like a normal
-NetworkManager VPN connection, while still relying on `gpclient` for
+NetworkManager VPN connection, while still relying on `gpclient` (via the standard globalprotect-openconnect package) for
 GlobalProtect protocol handling and browser-based authentication.
 
 This project is based on [NetworkManager-openconnect](https://github.com/GNOME/NetworkManager-openconnect), but with changes
@@ -17,7 +17,7 @@ skeleton, D-Bus integration, persistent TUN handling, packaging layout, and the
 helper that translates vpnc-script style environment variables into
 NetworkManager IP, DNS, and route configuration.
 
-Another project which appears to provide similar functionality is [GlobalProtect-SAML-NetworkManager](https://github.com/WMP/GlobalProtect-SAML-NetworkManager).
+Another project which appears to provide similar functionality is [GlobalProtect-SAML-NetworkManager](https://github.com/WMP/GlobalProtect-SAML-NetworkManager). This project differs in that it uses the standard globalprotect-openconnect package (gpclient, etc.) rather than bundling its own copy. Also, it doesn't attempt to offer KDE integration at this stage.
 
 ## Tested Version
 
