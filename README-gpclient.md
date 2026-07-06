@@ -67,7 +67,11 @@ nmcli connection down vpn0
 ```
 
 The service now attempts to clean up that stale `vpn0` state automatically when
-it is owned by the dedicated `nm-gpclient` user.
+it is owned by the dedicated `nm-gpclient` user. For `gpclient` 2.6.x
+compatibility, the service starts the `gpclient` child as root and supplies the
+`SUDO_*` desktop-user environment that gpclient expects when it relaunches
+browser authentication. It also refuses to start over a live `gpclient` lock
+file and removes stale `/var/run/gpclient.lock` files before launch.
 
 ## Next Work
 

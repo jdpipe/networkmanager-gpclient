@@ -1,0 +1,131 @@
+#!/bin/sh
+
+log=${NM_GPCLIENT_BROWSER_LOG:-/tmp/nm-gpclient-browser-helper.log}
+url=$1
+
+if [ -z "$url" ]; then
+	printf '%s: missing auth URL\n' "$0" >>"$log" 2>&1
+	exit 2
+fi
+
+uid=$(id -u)
+entry=$(getent passwd "$uid" 2>/dev/null || true)
+user=$(printf '%s' "$entry" | cut -d: -f1)
+home=$(printf '%s' "$entry" | cut -d: -f6)
+
+[ -n "$user" ] || user=${USER:-${LOGNAME:-}}
+[ -n "$home" ] || home=${HOME:-}
+[ -n "$home" ] || home=/home/$user
+
+export HOME=$home
+export USER=$user
+export LOGNAME=$user
+export USERNAME=$user
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$uid}
+export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}
+export XDG_DATA_DIRS=${XDG_DATA_DIRS:-/usr/local/share:/usr/share:/var/lib/snapd/desktop}
+export XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+export XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+export PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin${PATH:+:$PATH}"
+
+if [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; then
+	export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+	export DISPLAY=${DISPLAY:-:0}
+	export XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-wayland}
+	export MOZ_ENABLE_WAYLAND=${MOZ_ENABLE_WAYLAND:-1}
+else
+	export DISPLAY=${DISPLAY:-:0}
+	export XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-x11}
+fi
+
+if [ -z "${XAUTHORITY:-}" ]; then
+	for candidate in "$XDG_RUNTIME_DIR"/.mutter-Xwaylandauth.*; do
+		if [ -r "$candidate" ]; then
+			export XAUTHORITY=$candidate
+			break
+		fi
+	done
+fi
+
+browser=${NM_GPCLIENT_BROWSER:-default}
+case "$browser" in
+	""|default|auto)
+		if command -v gdbus >/dev/null 2>&1 && [ -S "$XDG_RUNTIME_DIR/bus" ]; then
+			set -- gdbus call --session \
+				--dest org.freedesktop.portal.Desktop \
+				--object-path /org/freedesktop/portal/desktop \
+				--method org.freedesktop.portal.OpenURI.OpenURI \
+				"" "$url" "{}"
+		elif command -v gio >/dev/null 2>&1; then
+			set -- gio open "$url"
+		else
+			set -- xdg-open "$url"
+		fi
+		;;
+	firefox)
+		if command -v gdbus >/dev/null 2>&1 && [ -S "$XDG_RUNTIME_DIR/bus" ]; then
+			set -- gdbus call --session \
+				--dest org.freedesktop.portal.Desktop \
+				--object-path /org/freedesktop/portal/desktop \
+				--method org.freedesktop.portal.OpenURI.OpenURI \
+				"" "$url" "{}"
+		else
+			set -- firefox "$url"
+		fi
+		;;
+	chrome)
+		if command -v google-chrome-stable >/dev/null 2>&1; then
+			set -- google-chrome-stable "$url"
+		elif command -v google-chrome >/dev/null 2>&1; then
+			set -- google-chrome "$url"
+		else
+			set -- chromium "$url"
+		fi
+		;;
+	chromium)
+		set -- chromium "$url"
+		;;
+	remote)
+		printf '%s: browser=remote cannot be handled by NetworkManager browser helper\n' "$0" >>"$log" 2>&1
+		exit 2
+		;;
+	*)
+		set -- "$browser" "$url"
+		;;
+esac
+
+{
+	printf '\n--- nm-gpclient-browser-helper %s ---\n' "$(date -Is)"
+	printf 'uid=%s gid=%s user=%s\n' "$(id -u)" "$(id -g)" "$(id -un)"
+	printf 'pid=%s ppid=%s pgid=%s sid=%s\n' "$$" "$PPID" "$(ps -o pgid= -p $$ | tr -d ' ')" "$(ps -o sid= -p $$ | tr -d ' ')"
+	printf 'url=%s\n' "$url"
+	printf 'browser=%s\n' "$browser"
+	printf 'command='
+	printf ' %s' "$@"
+	printf '\n'
+	env | sort | grep -E '^(BROWSER|DBUS_SESSION_BUS_ADDRESS|DISPLAY|HOME|LOGNAME|MOZ_|NM_GPCLIENT|PATH|SHELL|SNAP|SUDO_|USER|USERNAME|WAYLAND_DISPLAY|XAUTHORITY|XDG_)='
+	printf 'parent process:\n'
+	ps -o pid,ppid,pgid,sid,user,stat,cmd -p "$PPID"
+} >>"$log" 2>&1
+
+case " $* " in
+	*" org.freedesktop.portal.OpenURI.OpenURI "*)
+		(
+			port_file="${XDG_RUNTIME_DIR:-/run/user/$uid}/gpcallback.port"
+			i=0
+			while [ $i -lt 50 ] && [ ! -r "$port_file" ]; do
+				sleep 0.1
+				i=$((i + 1))
+			done
+			if [ -r "$port_file" ]; then
+				printf 'opening after callback port appeared: %s\n' "$port_file"
+			else
+				printf 'opening after timeout waiting for callback port: %s\n' "$port_file"
+			fi
+			exec "$@"
+		) >>"$log" 2>&1 &
+		exit 0
+		;;
+esac
+
+exec "$@" >>"$log" 2>&1

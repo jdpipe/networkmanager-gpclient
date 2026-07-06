@@ -22,10 +22,17 @@ NetworkManager IP, DNS, and route configuration.
 This prototype has been tested with:
 
 - `gpclient 2.5.4 (2026-05-09)`
+- `gpclient 2.6.4 (494e4a533 2026-06-25)`
 
-The direct-gateway mode described below is the path tested most thoroughly.
-Portal mode is less reliable with `gpclient` 2.5.x because that release does
-not provide the newer `--auto-gateway` behavior.
+The direct-gateway mode described below is the path that currently works well
+for the tested day-to-day use case. In that sense, this is a useful prototype
+for a specific user's GlobalProtect setup.
+
+Portal mode should not yet be treated as a working general solution. Although
+`gpclient` 2.6.4 provides `--auto-gateway`, this plugin has not yet found a
+reliable NetworkManager workflow for portal-first activation, gateway choice,
+second-stage gateway authentication, and callback handoff. Direct-gateway mode
+is the validated path at this stage.
 
 ## How It Works
 
@@ -46,10 +53,13 @@ temporary NetworkManager secret. The service then starts `gpclient connect`
 with `--cookie-on-stdin`, passes the auth JSON over stdin, and points
 `gpclient` at the NetworkManager helper script.
 
-The service creates a persistent TUN device as root, assigns it to the
-dedicated `nm-gpclient` user, and then drops the `gpclient` child process to
-that user. This keeps the long-running VPN process out of root while allowing
-NetworkManager to own the interface, routes, and DNS state.
+The service creates a persistent TUN device as root and starts `gpclient`
+under NetworkManager. With `gpclient` 2.6.x the child process is intentionally
+kept in the same privilege shape as `sudo -E gpclient`: the main process runs
+as root for tunnel/session management, while `SUDO_UID`, `SUDO_GID`,
+`SUDO_USER`, and desktop environment variables identify the user session for
+browser authentication relaunches. NetworkManager still owns the VPN profile,
+activation state, routes, and DNS state.
 
 ## How This Differs From NetworkManager-openconnect
 
@@ -166,9 +176,46 @@ gpclient connect gateway.example.edu --browser default --as-gateway
 but NetworkManager performs the privileged setup, starts the auth helper in the
 user session, and owns the resulting routes and DNS.
 
-Portal mode is present in the UI, but with `gpclient` 2.5.x direct-gateway mode
-is the practical path. Newer `gpclient` versions with `--auto-gateway` should
-be a better fit for portal-first activation, but that path needs more testing.
+Portal mode is present in the UI for experimentation, but it is not currently
+recommended for daily use. Direct-gateway mode is the practical path for the
+setup this prototype was built around.
+
+## Gateway Selection
+
+GlobalProtect gateway selection is not normally handled inside the browser
+login page. The browser/SAML step authenticates the user; after that,
+`gpclient` asks the portal for its configuration. That portal configuration can
+contain one or more gateways, each with a display name, server address, default
+priority, and optional region-specific priority rules.
+
+`gpclient` uses the region from the portal prelogin response to sort the
+portal-provided gateway list. With `--auto-gateway`, it tries gateways in that
+priority order. With `--gateway <name-or-address>`, it connects to the named
+gateway. If neither option is supplied and the portal returns multiple
+gateways, the standalone `gpclient` CLI can prompt interactively for a gateway
+choice.
+
+This NetworkManager plugin cannot expose that terminal prompt safely, because
+the service runs non-interactively under NetworkManager. It also does not yet
+have a separate portal-discovery workflow that can authenticate, fetch the
+available gateways, and present them to the user as a normal GUI choice. The
+current UI therefore supports these limited modes:
+
+- `Automatic gateway`: portal mode with no fixed gateway, using
+  `gpclient --auto-gateway`.
+- `Specific gateway`: portal mode with a configured gateway name or address,
+  passed to `gpclient --gateway`.
+- `Connect directly to gateway`: skip portal gateway discovery and treat the
+  configured gateway as the GlobalProtect gateway.
+
+This means the portal path does not currently provide the full GlobalProtect
+portal experience. In particular, users who are expected to choose a
+geographically local or otherwise policy-preferred gateway from the portal's
+gateway list cannot do that through this plugin yet. A richer future UI could
+authenticate to the portal, fetch the gateway list, and populate a gateway
+selector in the editor. That would require an explicit discovery workflow;
+NetworkManager editor plugins are otherwise mostly static profile editors, not
+post-login selection wizards.
 
 ## Validation
 
@@ -208,8 +255,13 @@ reconnect loop.
 
 ## Current Limitations
 
-- This is prototype software, tested on one working direct-gateway setup.
-- `gpclient` 2.5.x portal mode is not yet a reliable day-to-day path.
+- This is prototype software, validated for one working direct-gateway setup.
+- Portal-first mode is not solved. It may authenticate in the browser, but it
+  has not been made reliable through gateway selection, second gateway auth,
+  and callback handoff.
+- There is no gateway picker for portal-provided gateways; users must use
+  automatic selection, pre-enter a known gateway, or connect directly to a
+  known gateway.
 - The raw TUN device may also appear in NetworkManager as an assumed `vpn0`
   device, even when the VPN profile itself is active.
 - Client-certificate support is not polished. In particular, key passwords
@@ -221,8 +273,10 @@ reconnect loop.
 
 ## Security Notes
 
-- The long-running `gpclient` process is dropped to the dedicated
-  `nm-gpclient` user after the service creates the persistent TUN device.
+- The long-running `gpclient` process currently runs as root, matching the
+  privilege model of the known-working `sudo -E gpclient connect ...` command.
+  This is a deliberate `gpclient` 2.6.x compatibility tradeoff, not an ideal
+  final security boundary.
 - The browser-auth JSON is passed to `gpclient` over stdin and marked
   `NOT_SAVED` in NetworkManager.
 - Avoid enabling verbose VPN debug logs for normal use, because NetworkManager

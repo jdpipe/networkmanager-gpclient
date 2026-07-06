@@ -6,7 +6,11 @@ cd "$(dirname "$0")/.."
 ./configure --prefix=/usr --libexecdir=/usr/libexec --sysconfdir=/etc --localstatedir=/var
 make -j"$(nproc)"
 sudo make install
+sudo install -m 755 src/nm-gpclient-browser-helper /usr/libexec/nm-gpclient-browser-helper
+sudo mkdir -p /etc/NetworkManager/conf.d
+printf "[device-nm-gpclient-vpn0]\nmatch-device=interface-name:vpn0\nmanaged=0\n" | sudo tee /etc/NetworkManager/conf.d/90-nm-gpclient-vpn0-unmanaged.conf >/dev/null
 sudo rm -f /usr/lib/NetworkManager/conf.d/nm-gpclient-unmanaged.conf
+sudo chown root:root /usr/lib/NetworkManager/dispatcher.d/gpclient-nm-hook /usr/lib/NetworkManager/dispatcher.d/pre-down.d/gpclient.down 2>/dev/null || true
 
 if command -v systemd-sysusers >/dev/null 2>&1; then
 	sudo systemd-sysusers /usr/lib/sysusers.d/nm-gpclient-sysusers.conf || true

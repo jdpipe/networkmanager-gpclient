@@ -34,6 +34,7 @@ static void gpclient_editor_interface_init(NMVpnEditorInterface *iface);
 GType gpclient_editor_get_type(void);
 
 #define GPCLIENT_EDITOR(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj), gpclient_editor_get_type(), GpclientEditor))
+#define GPCLIENT_DEFAULT_VPN_TIMEOUT 300
 
 G_DEFINE_TYPE_EXTENDED(GpclientEditor,
                        gpclient_editor,
@@ -454,13 +455,18 @@ editor_update_connection(NMVpnEditor *iface, NMConnection *connection, GError **
 	}
 
 	s_vpn = NM_SETTING_VPN(nm_setting_vpn_new());
-	g_object_set(s_vpn, NM_SETTING_VPN_SERVICE_TYPE, NM_VPN_SERVICE_TYPE_OPENCONNECT, NULL);
+	g_object_set(s_vpn,
+	             NM_SETTING_VPN_SERVICE_TYPE, NM_VPN_SERVICE_TYPE_OPENCONNECT,
+	             NM_SETTING_VPN_TIMEOUT, GPCLIENT_DEFAULT_VPN_TIMEOUT,
+	             NULL);
 
 	if (direct_gateway) {
 		nm_setting_vpn_add_data_item(s_vpn,
 		                             NM_OPENCONNECT_KEY_GATEWAY,
 		                             gateway && gateway[0] ? gateway : portal);
 		nm_setting_vpn_add_data_item(s_vpn, NM_OPENCONNECT_KEY_AS_GATEWAY, "yes");
+		if (portal && portal[0])
+			nm_setting_vpn_add_data_item(s_vpn, NM_OPENCONNECT_KEY_PORTAL, portal);
 	} else {
 		nm_setting_vpn_add_data_item(s_vpn, NM_OPENCONNECT_KEY_PORTAL, portal);
 		if (gateway && gateway[0])

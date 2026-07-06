@@ -34,6 +34,7 @@
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <limits.h>
 #include <errno.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -70,6 +71,8 @@ static const char *gpclient_binary_paths[] =
 };
 
 #define NM_GPCLIENT_HELPER_PATH LIBEXECDIR"/nm-gpclient-service-helper"
+#define NM_GPCLIENT_BROWSER_HELPER_PATH LIBEXECDIR"/nm-gpclient-browser-helper"
+#define GPCLIENT_LOCK_FILE "/var/run/gpclient.lock"
 
 static gboolean
 gpclient_supports_connect_arg (const char *binary, const char *arg)
@@ -315,6 +318,10 @@ build_gpclient_env (NMSettingConnection *s_con)
 	struct passwd *pw = NULL;
 	char uid_buf[32];
 	char gid_buf[32];
+	char runtime_dir[PATH_MAX];
+	char dbus_address[PATH_MAX + 32];
+	char wayland_path[PATH_MAX];
+	char xauthority[PATH_MAX];
 	char **envp;
 
 	if (geteuid () != 0 || !s_con)
@@ -342,6 +349,30 @@ build_gpclient_env (NMSettingConnection *s_con)
 	envp = g_environ_setenv (envp, "SUDO_UID", uid_buf, TRUE);
 	envp = g_environ_setenv (envp, "SUDO_GID", gid_buf, TRUE);
 	envp = g_environ_setenv (envp, "SUDO_USER", pw->pw_name, TRUE);
+	envp = g_environ_setenv (envp, "HOME", pw->pw_dir, TRUE);
+	envp = g_environ_setenv (envp, "USER", pw->pw_name, TRUE);
+	envp = g_environ_setenv (envp, "LOGNAME", pw->pw_name, TRUE);
+	envp = g_environ_setenv (envp, "BROWSER", "firefox", TRUE);
+	envp = g_environ_setenv (envp, "RUST_BACKTRACE", "1", TRUE);
+	envp = g_environ_setenv (envp, "RUST_LIB_BACKTRACE", "1", TRUE);
+
+	g_snprintf (runtime_dir, sizeof (runtime_dir), "/run/user/%lu", (unsigned long) pw->pw_uid);
+	g_snprintf (dbus_address, sizeof (dbus_address), "unix:path=%s/bus", runtime_dir);
+	g_snprintf (wayland_path, sizeof (wayland_path), "%s/wayland-0", runtime_dir);
+	g_snprintf (xauthority, sizeof (xauthority), "%s/.Xauthority", pw->pw_dir);
+
+	envp = g_environ_setenv (envp, "XDG_RUNTIME_DIR", runtime_dir, TRUE);
+	envp = g_environ_setenv (envp, "DBUS_SESSION_BUS_ADDRESS", dbus_address, TRUE);
+	if (g_file_test (wayland_path, G_FILE_TEST_EXISTS)) {
+		envp = g_environ_setenv (envp, "WAYLAND_DISPLAY", "wayland-0", TRUE);
+		envp = g_environ_setenv (envp, "XDG_SESSION_TYPE", "wayland", TRUE);
+		envp = g_environ_setenv (envp, "MOZ_ENABLE_WAYLAND", "1", TRUE);
+	} else {
+		envp = g_environ_setenv (envp, "DISPLAY", ":0", TRUE);
+		envp = g_environ_setenv (envp, "XDG_SESSION_TYPE", "x11", TRUE);
+		if (g_file_test (xauthority, G_FILE_TEST_EXISTS))
+			envp = g_environ_setenv (envp, "XAUTHORITY", xauthority, TRUE);
+	}
 
 	_LOGI ("gpclient will use desktop user %s (%lu) for any helper auth",
 	       pw->pw_name,
@@ -462,7 +493,13 @@ nm_get_property (GDBusConnection *connection,
 		return NULL;
 	}
 
-	g_variant_get (ret, "(@v)", &value);
+	{
+		GVariant *wrapped = NULL;
+
+		g_variant_get (ret, "(@v)", &wrapped);
+		value = g_variant_get_variant (wrapped);
+		g_variant_unref (wrapped);
+	}
 	g_variant_unref (ret);
 	return value;
 }
@@ -648,18 +685,108 @@ destroy_persistent_tundev(char *tun_name)
 	close(fd);
 }
 
+static gboolean
+read_gpclient_lock_pid (GPid *pid)
+{
+	char *contents = NULL;
+	char *end = NULL;
+	gsize len = 0;
+	long parsed;
+
+	if (!g_file_get_contents (GPCLIENT_LOCK_FILE, &contents, &len, NULL))
+		return FALSE;
+
+	errno = 0;
+	parsed = strtol (contents, &end, 10);
+	g_free (contents);
+
+	if (errno || end == contents || parsed <= 0 || parsed > INT_MAX)
+		return FALSE;
+
+	*pid = (GPid) parsed;
+	return TRUE;
+}
+
+static gboolean
+pid_is_running (GPid pid)
+{
+	if (kill ((pid_t) pid, 0) == 0)
+		return TRUE;
+	return errno == EPERM;
+}
+
+static gboolean
+pid_comm_is_gpclient (GPid pid)
+{
+	char path[64];
+	char comm[64];
+	FILE *fp;
+	gboolean is_gpclient = FALSE;
+
+	g_snprintf (path, sizeof (path), "/proc/%ld/comm", (long) pid);
+	fp = fopen (path, "r");
+	if (!fp)
+		return TRUE;
+
+	if (fgets (comm, sizeof (comm), fp)) {
+		g_strchomp (comm);
+		is_gpclient = !strcmp (comm, "gpclient");
+	}
+	fclose (fp);
+
+	return is_gpclient;
+}
+
+static gboolean
+prepare_gpclient_lock (GError **error)
+{
+	GPid pid = 0;
+
+	if (!g_file_test (GPCLIENT_LOCK_FILE, G_FILE_TEST_EXISTS))
+		return TRUE;
+
+	if (read_gpclient_lock_pid (&pid) && pid_is_running (pid)) {
+		if (pid_comm_is_gpclient (pid)) {
+			g_set_error (error,
+			             NM_VPN_PLUGIN_ERROR,
+			             NM_VPN_PLUGIN_ERROR_LAUNCH_FAILED,
+			             _("gpclient is already running with pid %ld"),
+			             (long) pid);
+			return FALSE;
+		}
+
+		g_set_error (error,
+		             NM_VPN_PLUGIN_ERROR,
+		             NM_VPN_PLUGIN_ERROR_LAUNCH_FAILED,
+		             _("Refusing to remove gpclient lock file owned by running pid %ld"),
+		             (long) pid);
+		return FALSE;
+	}
+
+	if (unlink (GPCLIENT_LOCK_FILE) < 0 && errno != ENOENT) {
+		g_set_error (error,
+		             NM_VPN_PLUGIN_ERROR,
+		             NM_VPN_PLUGIN_ERROR_LAUNCH_FAILED,
+		             _("Could not remove stale gpclient lock file: %s"),
+		             g_strerror (errno));
+		return FALSE;
+	}
+
+	_LOGI ("Removed stale gpclient lock file");
+	return TRUE;
+}
+
 static void
 gpclient_drop_child_privs(gpointer user_data)
 {
-	char *tun_name = user_data;
+	if (setpgid (0, 0) != 0)
+		_LOGW ("Failed to create gpclient process group: %s", g_strerror (errno));
 
-	if (tun_name) {
-		if (initgroups (NM_OPENCONNECT_USER, gl.tun_group) ||
-		    setgid (gl.tun_group) || setuid (gl.tun_owner)) {
-			_LOGW ("Failed to drop privileges when spawning gpclient");
-			exit (1);
-		}
-	}
+	/*
+	 * gpclient 2.6.x assumes the main process has the same shape as
+	 * `sudo -E gpclient`: root for tunnel/session management, with SUDO_UID
+	 * and friends identifying the desktop user for browser auth relaunches.
+	 */
 }
 
 static void
@@ -733,6 +860,7 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 	GSource *gpclient_watch;
 	gint stdin_fd = -1;
 	gboolean use_cookie;
+	gboolean direct_gateway_mode;
 	char **envp = NULL;
 	const char *props_portal, *props_vpn_gw, *props_cookie, *props_mtu;
 	const char *props_csd_enable, *props_csd_wrapper;
@@ -776,6 +904,10 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 		return -1;
 	}
 
+	direct_gateway_mode = props_as_gateway && !strcmp (props_as_gateway, "yes");
+	if (!props_portal || !strlen (props_portal))
+		direct_gateway_mode = TRUE;
+
 	props_cookie = nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_COOKIE);
 	use_cookie = props_cookie && strlen (props_cookie);
 	if (!use_cookie) {
@@ -799,8 +931,14 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 	props_ignore_tls = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_IGNORE_TLS_ERRORS);
 	props_browser = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_BROWSER);
 	envp = build_gpclient_env (s_con);
+	envp = g_environ_setenv (envp, "NM_GPCLIENT_BROWSER",
+	                        props_browser && strlen (props_browser) ? props_browser : "default",
+	                        TRUE);
 
-	connect_server = (props_portal && strlen (props_portal)) ? props_portal : props_vpn_gw;
+	if (direct_gateway_mode)
+		connect_server = (props_vpn_gw && strlen (props_vpn_gw)) ? props_vpn_gw : props_portal;
+	else
+		connect_server = (props_portal && strlen (props_portal)) ? props_portal : props_vpn_gw;
 
 	gpclient_argv = g_ptr_array_new ();
 	g_ptr_array_add (gpclient_argv, (gpointer) (*gpclient_binary));
@@ -810,13 +948,14 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 		g_ptr_array_add (gpclient_argv, (gpointer) "--ignore-tls-errors");
 	g_ptr_array_add (gpclient_argv, (gpointer) "connect");
 	g_ptr_array_add (gpclient_argv, (gpointer) connect_server);
-	g_ptr_array_add (gpclient_argv, (gpointer) "--cookie-on-stdin");
-	if (props_browser && strlen (props_browser)) {
-		g_ptr_array_add (gpclient_argv, (gpointer) "--browser");
-		g_ptr_array_add (gpclient_argv, (gpointer) props_browser);
-	}
+	if (use_cookie)
+		g_ptr_array_add (gpclient_argv, (gpointer) "--cookie-on-stdin");
+	g_ptr_array_add (gpclient_argv, (gpointer) "--browser");
+	g_ptr_array_add (gpclient_argv, (gpointer) NM_GPCLIENT_BROWSER_HELPER_PATH);
 
-	if (props_portal && strlen (props_portal)) {
+	if (direct_gateway_mode) {
+		g_ptr_array_add (gpclient_argv, (gpointer) "--as-gateway");
+	} else if (props_portal && strlen (props_portal)) {
 		if (props_auto_gateway && !strcmp (props_auto_gateway, "yes")) {
 			if (gpclient_supports_connect_arg (*gpclient_binary, "--auto-gateway")) {
 				g_ptr_array_add (gpclient_argv, (gpointer) "--auto-gateway");
@@ -827,8 +966,6 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 			g_ptr_array_add (gpclient_argv, (gpointer) "--gateway");
 			g_ptr_array_add (gpclient_argv, (gpointer) props_vpn_gw);
 		}
-	} else if (props_as_gateway && !strcmp (props_as_gateway, "yes")) {
-		g_ptr_array_add (gpclient_argv, (gpointer) "--as-gateway");
 	}
 
 	if (props_mtu && strlen(props_mtu)) {
@@ -898,6 +1035,17 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 	}
 
 	g_ptr_array_add (gpclient_argv, NULL);
+
+	if (!prepare_gpclient_lock (error)) {
+		g_ptr_array_free (gpclient_argv, TRUE);
+		g_strfreev (envp);
+		if (priv->tun_name) {
+			destroy_persistent_tundev (priv->tun_name);
+			g_free (priv->tun_name);
+			priv->tun_name = NULL;
+		}
+		return -1;
+	}
 
 	if (!g_spawn_async_with_pipes (NULL, (char **) gpclient_argv->pdata, envp,
 	                               G_SPAWN_DO_NOT_REAP_CHILD,
@@ -993,20 +1141,21 @@ real_need_secrets (NMVpnServicePlugin *plugin,
 		return FALSE;
 	}
 
-	/* The auth layer should provide gpclient's JSON auth result as the
-	 * cookie secret. The target gateway is optional for portal-mode
-	 * connections; without one, gpclient performs its native portal/gateway
-	 * handling. */
 	if (!nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_GATEWAY) &&
 	    !nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_GATEWAY) &&
 	    !nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_PORTAL)) {
 		*setting_name = NM_SETTING_VPN_SETTING_NAME;
 		return TRUE;
 	}
+
+	/* Run browser authentication through NetworkManager's user-session
+	 * auth dialog for both portal and direct-gateway modes, then feed
+	 * the returned gpclient JSON to gpclient via --cookie-on-stdin. */
 	if (!nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_COOKIE)) {
 		*setting_name = NM_SETTING_VPN_SETTING_NAME;
 		return TRUE;
 	}
+
 	return FALSE;
 }
 
@@ -1015,7 +1164,9 @@ ensure_killed (gpointer data)
 {
 	int pid = GPOINTER_TO_INT (data);
 
-	if (kill (pid, 0) == 0)
+	if (kill (-pid, 0) == 0)
+		kill (-pid, SIGKILL);
+	else if (kill (pid, 0) == 0)
 		kill (pid, SIGKILL);
 
 	return FALSE;
@@ -1029,10 +1180,12 @@ real_disconnect (NMVpnServicePlugin   *plugin,
 
 	if (priv->pid) {
 		priv->disconnect_requested = TRUE;
-		if (kill (priv->pid, SIGINT) == 0)
+		if (kill (-priv->pid, SIGINT) == 0)
+			g_timeout_add (2000, ensure_killed, GINT_TO_POINTER (priv->pid));
+		else if (kill (priv->pid, SIGINT) == 0)
 			g_timeout_add (2000, ensure_killed, GINT_TO_POINTER (priv->pid));
 		else
-			kill (priv->pid, SIGKILL);
+			kill (-priv->pid, SIGKILL);
 
 		_LOGI ("Terminated gpclient daemon with PID %d.", priv->pid);
 	}
