@@ -10,12 +10,14 @@ session. The intent is to make day-to-day use feel like a normal
 NetworkManager VPN connection, while still relying on `gpclient` for
 GlobalProtect protocol handling and browser-based authentication.
 
-This project is based on `NetworkManager-openconnect`, but it has been changed
+This project is based on [NetworkManager-openconnect](https://github.com/GNOME/NetworkManager-openconnect), but with changes
 to make use of `gpclient` rather than talking to OpenConnect directly. It
 reuses substantial NetworkManager VPN plugin code, especially the service
 skeleton, D-Bus integration, persistent TUN handling, packaging layout, and the
 helper that translates vpnc-script style environment variables into
 NetworkManager IP, DNS, and route configuration.
+
+Another project which appears to provide similar functionality is [GlobalProtect-SAML-NetworkManager](https://github.com/WMP/GlobalProtect-SAML-NetworkManager).
 
 ## Tested Version
 
@@ -26,6 +28,9 @@ This prototype has been tested with:
 The direct-gateway mode described below is the path tested most thoroughly.
 Portal mode is less reliable with `gpclient` 2.5.x because that release does
 not provide the newer `--auto-gateway` behavior.
+
+| ![](https://github.com/user-attachments/assets/770c4053-c673-496e-a789-3321f14c4f00) | ![](https://github.com/user-attachments/assets/72f712ab-d54c-44da-b18b-e91373d36d74) |
+|-----------|--------|
 
 ## How It Works
 
