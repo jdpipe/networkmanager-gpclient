@@ -209,7 +209,12 @@ tools_test_secret_flags_LDADD = $(GLIB_LIBS) $(LIBNM_LIBS)
 
 if WITH_AUTHDLG
 check_PROGRAMS += tools/test-reconnect
+check_PROGRAMS += tools/nm-gpclient-auth-dialog-test
 TESTS += tools/test-reconnect.sh
+
+tools_nm_gpclient_auth_dialog_test_SOURCES = auth-dialog/nm-gpclient-auth-dialog.c
+tools_nm_gpclient_auth_dialog_test_CPPFLAGS = $(auth_dialog_nm_gpclient_auth_dialog_CPPFLAGS) -DNM_GPAUTH_BINARY=\"gpauth\"
+tools_nm_gpclient_auth_dialog_test_LDADD = $(auth_dialog_nm_gpclient_auth_dialog_LDADD)
 
 tools_test_reconnect_SOURCES = \
 	tools/test-reconnect.c \
@@ -219,9 +224,9 @@ tools_test_reconnect_LDADD = $(GLIB_LIBS) $(LIBNM_LIBS)
 endif
 
 EXTRA_DIST += tools/test-reconnect.sh tools/create-test-profile.sh \
-	tools/test-browser-helper.sh tools/test-upstream-auth.sh \
+	tools/test-browser-helper.sh tools/test-upstream-auth.sh tools/test-packaging.sh \
 	src/nm-gpclient-browser-helper \
-	shared/nm-gpclient-version.h
+	shared/nm-gpclient-version.h shared/nm-gpclient-paths.h
 
 
 if WITH_LIBNM_GLIB
@@ -231,7 +236,7 @@ install-data-hook:
 	mkdir -p $(DESTDIR)$(sysconfdir)/NetworkManager/VPN
 	sed -e "1s|^|# This file is obsoleted by a file in $(NM_VPN_SERVICE_DIR)\n\n|" \
 	    -e 's|[@]LIBEXECDIR[@]|$(libexecdir)|g' \
-	    -e 's|[@]PLUGINDIR[@]|@NM_PLUGIN_DIR@|g' \
+	    -e 's|[@]PLUGINDIR[@]|$(NM_PLUGIN_DIR_NAME_FILE)|g' \
 	    <$(srcdir)/nm-gpclient-service.name.in \
 	    >$(DESTDIR)$(sysconfdir)/NetworkManager/VPN/nm-gpclient-service.name
 
@@ -241,7 +246,7 @@ endif
 
 nm-gpclient-service.name: $(srcdir)/nm-gpclient-service.name.in Makefile
 	sed -e 's|[@]LIBEXECDIR[@]|$(libexecdir)|g' \
-	    -e 's|[@]PLUGINDIR[@]|$(NM_PLUGIN_DIR)|g' \
+	    -e 's|[@]PLUGINDIR[@]|$(NM_PLUGIN_DIR_NAME_FILE)|g' \
 	    $< >$@
 
 nm-gpclient-sysusers.conf: $(srcdir)/nm-gpclient-sysusers.conf.in Makefile

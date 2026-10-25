@@ -3,7 +3,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-./configure --prefix=/usr --libexecdir=/usr/libexec --sysconfdir=/etc --localstatedir=/var --with-gnome=yes --with-gtk4=yes --with-authdlg=yes
+./configure --prefix=/usr --libexecdir=/usr/libexec --sysconfdir=/etc --localstatedir=/var --enable-absolute-paths --with-gnome=yes --with-gtk4=yes --with-authdlg=yes
 make -j"$(nproc)"
 sudo make install
 sudo mkdir -p /etc/NetworkManager/conf.d

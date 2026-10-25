@@ -3,6 +3,10 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+# The installed auth dialog uses a fixed configured path; this test fixture
+# deliberately resolves a fake gpauth from the test PATH.
+make -s tools/nm-gpclient-auth-dialog-test
+
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -27,7 +31,7 @@ export PATH="$tmpdir:$PATH"
 
 mkfifo "$tmpdir/stdin" "$tmpdir/stdout"
 
-./auth-dialog/nm-gpclient-auth-dialog \
+./tools/nm-gpclient-auth-dialog-test \
 	--uuid test-uuid \
 	--name gpclient-test \
 	--service org.freedesktop.NetworkManager.gpclient \

@@ -8,6 +8,7 @@
 
 #include "nm-default.h"
 #include "nm-gpclient-version.h"
+#include "nm-gpclient-paths.h"
 
 #include <errno.h>
 #include <getopt.h>
@@ -152,14 +153,14 @@ run_gpauth(const char *server,
 	gint exit_status = 0;
 	gboolean ok;
 
-	if (!nm_gpclient_check_version ("gpauth", "gpauth", &error)) {
+	if (!nm_gpclient_check_version (NM_GPAUTH_BINARY, "gpauth", &error)) {
 		fprintf(stderr, "%s\n", error->message);
 		g_clear_error(&error);
 		return FALSE;
 	}
 
 	argv = g_ptr_array_new();
-	g_ptr_array_add(argv, "gpauth");
+	g_ptr_array_add(argv, NM_GPAUTH_BINARY);
 	if (as_gateway)
 		g_ptr_array_add(argv, "--gateway");
 	g_ptr_array_add(argv, (gpointer) server);

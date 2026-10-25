@@ -103,7 +103,7 @@ AM_CONDITIONAL(WITH_GNOME, test "$with_gnome" != no)
 AM_CONDITIONAL(WITH_GTK4, test "$with_gtk4" != no)
 AM_CONDITIONAL(WITH_LIBNM_GLIB, test "$with_libnm_glib" != no)
 
-AC_ARG_ENABLE(absolute-paths, AS_HELP_STRING([--enable-absolute-paths], [Use absolute paths to in .name files. Useful for development. (default is no)]))
+AC_ARG_ENABLE(absolute-paths, AS_HELP_STRING([--enable-absolute-paths], [Use an absolute editor plugin path in .name files (default: no)]), [], [enable_absolute_paths=no])
 
 GETTEXT_PACKAGE=NetworkManager-gpclient
 AC_SUBST(GETTEXT_PACKAGE)
@@ -165,12 +165,41 @@ if test x"$with_sso_mib" = xyes; then
 fi
 AM_CONDITIONAL(WITH_SSO_MIB, test x"$with_sso_mib" = xyes)
 
-NM_VPN_SERVICE_DIR=`$PKG_CONFIG --define-variable prefix='\${prefix}' --variable vpnservicedir libnm`
+AC_ARG_VAR([GPCLIENT_BINARY], [Absolute path to the gpclient executable])
+AC_ARG_WITH([gpclient], AS_HELP_STRING([--with-gpclient=PATH], [Absolute path to gpclient]), [GPCLIENT_BINARY=$withval])
+AC_PATH_PROG([GPCLIENT_BINARY], [gpclient], [/usr/bin/gpclient], [$PATH:/usr/local/bin:/usr/bin:/opt/bin])
+AC_ARG_VAR([GPAUTH_BINARY], [Absolute path to the gpauth executable])
+AC_ARG_WITH([gpauth], AS_HELP_STRING([--with-gpauth=PATH], [Absolute path to gpauth]), [GPAUTH_BINARY=$withval])
+AC_PATH_PROG([GPAUTH_BINARY], [gpauth], [/usr/bin/gpauth], [$PATH:/usr/local/bin:/usr/bin:/opt/bin])
+AC_ARG_VAR([MODPROBE], [Absolute path to modprobe, or no to disable module loading])
+AC_ARG_WITH([modprobe], AS_HELP_STRING([--with-modprobe=PATH], [Absolute path to modprobe; --without-modprobe disables module loading]), [MODPROBE=$withval])
+AS_IF([test "x$MODPROBE" = xno], [MODPROBE=], [
+	AC_PATH_PROG([MODPROBE], [modprobe], [], [$PATH:/usr/sbin:/sbin])
+])
+AC_ARG_VAR([GPCLIENT_LOCK_FILE], [Absolute path to the shared gpclient PID lock file])
+AC_ARG_WITH([gpclient-lock-file], AS_HELP_STRING([--with-gpclient-lock-file=PATH], [gpclient PID lock file (default: /run/gpclient.lock)]), [GPCLIENT_LOCK_FILE=$withval])
+AS_IF([test -z "$GPCLIENT_LOCK_FILE"], [GPCLIENT_LOCK_FILE=/run/gpclient.lock])
+AS_CASE([$GPCLIENT_BINARY], [/*], [], [AC_MSG_ERROR([gpclient path must be absolute])])
+AS_CASE([$GPAUTH_BINARY], [/*], [], [AC_MSG_ERROR([gpauth path must be absolute])])
+AS_CASE([$MODPROBE], [/*|""], [], [AC_MSG_ERROR([modprobe path must be absolute, or use --without-modprobe])])
+AS_CASE([$GPCLIENT_LOCK_FILE], [/*], [], [AC_MSG_ERROR([gpclient lock file must be absolute])])
+AC_DEFINE_UNQUOTED([NM_GPCLIENT_BINARY_DEFAULT], ["$GPCLIENT_BINARY"], [Configured gpclient executable])
+AC_DEFINE_UNQUOTED([NM_GPAUTH_BINARY_DEFAULT], ["$GPAUTH_BINARY"], [Configured gpauth executable])
+AC_DEFINE_UNQUOTED([NM_MODPROBE_DEFAULT], ["$MODPROBE"], [Configured module loader, empty if disabled])
+AC_DEFINE_UNQUOTED([NM_GPCLIENT_LOCK_FILE_DEFAULT], ["$GPCLIENT_LOCK_FILE"], [Configured gpclient PID lock file])
+
+AC_ARG_VAR([NM_VPN_SERVICE_DIR], [NetworkManager VPN service metadata directory])
+AC_ARG_WITH([nm-vpn-service-dir], AS_HELP_STRING([--with-nm-vpn-service-dir=DIR], [NetworkManager VPN service metadata directory]), [NM_VPN_SERVICE_DIR=$withval])
+AS_IF([test -z "$NM_VPN_SERVICE_DIR"], [NM_VPN_SERVICE_DIR=`$PKG_CONFIG --variable=vpnservicedir libnm`])
+AS_IF([test -z "$NM_VPN_SERVICE_DIR"], [NM_VPN_SERVICE_DIR='${libdir}/NetworkManager/VPN'])
 AC_SUBST(NM_VPN_SERVICE_DIR)
 
 NM_COMPILER_WARNINGS
 
-NM_PLUGIN_DIR=`$PKG_CONFIG --define-variable prefix='\${prefix}' --variable plugindir libnm`
+AC_ARG_VAR([NM_PLUGIN_DIR], [libnm VPN editor plugin directory])
+AC_ARG_WITH([nm-plugin-dir], AS_HELP_STRING([--with-nm-plugin-dir=DIR], [libnm VPN editor plugin directory]), [NM_PLUGIN_DIR=$withval])
+AS_IF([test -z "$NM_PLUGIN_DIR"], [NM_PLUGIN_DIR=`$PKG_CONFIG --variable=plugindir libnm`])
+AS_IF([test -z "$NM_PLUGIN_DIR"], [NM_PLUGIN_DIR='${libdir}/NetworkManager'])
 AC_SUBST(NM_PLUGIN_DIR)
 if test x"$enable_absolute_paths" == x"yes"; then
 	NM_PLUGIN_DIR_NAME_FILE="$NM_PLUGIN_DIR/"
@@ -209,3 +238,9 @@ echo "  --with-authdlg=$with_authdlg"
 echo "  --with-sso-mib=$with_sso_mib"
 echo "  --enable-absolute-paths=$enable_absolute_paths"
 echo "  --enable-more-warnings=$set_more_warnings"
+echo "  gpclient=$GPCLIENT_BINARY"
+echo "  gpauth=$GPAUTH_BINARY"
+echo "  modprobe=$MODPROBE"
+echo "  gpclient lock file=$GPCLIENT_LOCK_FILE"
+echo "  libnm plugin directory=$NM_PLUGIN_DIR"
+echo "  VPN service directory=$NM_VPN_SERVICE_DIR"

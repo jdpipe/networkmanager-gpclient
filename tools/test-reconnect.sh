@@ -41,7 +41,7 @@ export PROFILE_DATA="$tmpdir/profile.data" GPAUTH_CALLS="$tmpdir/gpauth.calls"
 
 "$srcdir/tools/create-test-profile.sh" vpn.example.edu reconnect-test default
 "$builddir/tools/test-reconnect" "$(cat "$PROFILE_DATA")" \
-	"$builddir/auth-dialog/nm-gpclient-auth-dialog"
+	"$builddir/tools/nm-gpclient-auth-dialog-test"
 
 # Both modelled activations in each mode must run gpauth.
 test "$(wc -l <"$GPAUTH_CALLS")" -eq 4

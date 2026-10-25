@@ -143,6 +143,7 @@ That script configures the project with:
   --libexecdir=/usr/libexec \
   --sysconfdir=/etc \
   --localstatedir=/var \
+  --enable-absolute-paths \
   --with-gnome=yes \
   --with-gtk4=yes \
   --with-authdlg=yes
@@ -158,6 +159,40 @@ For a service-only install without the editor plugins:
 cd ~/networkmanager-gpclient
 ./tools/install-core.sh
 ```
+
+Packagers can configure executable and installation paths directly:
+
+```sh
+./configure \
+  --with-gpclient=/absolute/path/to/gpclient \
+  --with-gpauth=/absolute/path/to/gpauth \
+  --with-modprobe=/absolute/path/to/modprobe \
+  --with-gpclient-lock-file=/run/gpclient.lock \
+  --with-nm-plugin-dir=/absolute/path/to/libnm/plugins \
+  --with-nm-vpn-service-dir=/absolute/path/to/NetworkManager/VPN
+```
+
+The equivalent configure variables are `GPCLIENT_BINARY`, `GPAUTH_BINARY`,
+`MODPROBE`, `GPCLIENT_LOCK_FILE`, `NM_PLUGIN_DIR`, and `NM_VPN_SERVICE_DIR`.
+Executable paths are resolved at configure time and shared by the service,
+auth dialog, and editor. The service also passes the configured `gpauth` path
+to gpclient for later authentication attempts. Use `--without-modprobe` when
+TUN is built in or module loading is managed elsewhere.
+
+The PID lock defaults to `/run/gpclient.lock`; the service passes this path
+to gpclient with `--lock-file` and uses it for stale-lock checks. Create its
+parent directory beforehand if choosing a different location.
+
+Plugin and VPN service directories default to libnm's `pkg-config` values,
+with `${libdir}/NetworkManager` and `${libdir}/NetworkManager/VPN` fallbacks
+when those values are empty. `--enable-absolute-paths` writes the full plugin
+filename into the service metadata; the default writes its basename for
+NetworkManager to resolve in its plugin directory. This option does not
+change where the plugin is installed. The desktop installation scripts enable
+absolute paths explicitly.
+
+Use `make install DESTDIR=/absolute/staging/path` for packaging. The browser
+helper is installed alongside the other libexec helpers by `make install`.
 
 If `GlobalProtect (gpclient)` does not appear immediately in the Add VPN
 workflow, close and reopen the editor. If NetworkManager still does not see the
@@ -317,6 +352,11 @@ make check
 ./tools/test-reconnect.sh
 ./tools/test-editor-plugin.sh
 ```
+
+`./tools/test-packaging.sh` additionally checks non-FHS executable paths,
+module-loader errors, stale-lock cleanup, directory overrides and fallbacks,
+both metadata path modes, and staged installation. It builds temporary copies
+and does not install system files or activate a VPN.
 
 To exercise the real upstream 3.x callback transport with synthetic SAML data,
 run the following as your desktop user. It uses only a local HTTP server and

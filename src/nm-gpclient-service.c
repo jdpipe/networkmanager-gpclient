@@ -26,6 +26,7 @@
 
 #include "nm-gpclient-service.h"
 #include "nm-gpclient-version.h"
+#include "nm-gpclient-paths.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -63,17 +64,8 @@ typedef struct {
 
 #define NM_OPENCONNECT_PLUGIN_GET_PRIVATE(o) (G_TYPE_INSTANCE_GET_PRIVATE ((o), NM_TYPE_OPENCONNECT_PLUGIN, NMOpenconnectPluginPrivate))
 
-static const char *gpclient_binary_paths[] =
-{
-	"/usr/bin/gpclient",
-	"/usr/local/bin/gpclient",
-	"/opt/bin/gpclient",
-	NULL
-};
-
 #define NM_GPCLIENT_HELPER_PATH LIBEXECDIR"/nm-gpclient-service-helper"
 #define NM_GPCLIENT_BROWSER_HELPER_PATH LIBEXECDIR"/nm-gpclient-browser-helper"
-#define GPCLIENT_LOCK_FILE "/var/run/gpclient.lock"
 
 typedef struct {
 	const char *name;
@@ -672,7 +664,7 @@ read_gpclient_lock_pid (GPid *pid)
 	gsize len = 0;
 	long parsed;
 
-	if (!g_file_get_contents (GPCLIENT_LOCK_FILE, &contents, &len, NULL))
+	if (!g_file_get_contents (NM_GPCLIENT_LOCK_FILE, &contents, &len, NULL))
 		return FALSE;
 
 	errno = 0;
@@ -721,7 +713,7 @@ prepare_gpclient_lock (GError **error)
 {
 	GPid pid = 0;
 
-	if (!g_file_test (GPCLIENT_LOCK_FILE, G_FILE_TEST_EXISTS))
+	if (!g_file_test (NM_GPCLIENT_LOCK_FILE, G_FILE_TEST_EXISTS))
 		return TRUE;
 
 	if (read_gpclient_lock_pid (&pid) && pid_is_running (pid)) {
@@ -742,7 +734,7 @@ prepare_gpclient_lock (GError **error)
 		return FALSE;
 	}
 
-	if (unlink (GPCLIENT_LOCK_FILE) < 0 && errno != ENOENT) {
+	if (unlink (NM_GPCLIENT_LOCK_FILE) < 0 && errno != ENOENT) {
 		g_set_error (error,
 		             NM_VPN_PLUGIN_ERROR,
 		             NM_VPN_PLUGIN_ERROR_LAUNCH_FAILED,
@@ -834,7 +826,6 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 {
 	NMOpenconnectPluginPrivate *priv = NM_OPENCONNECT_PLUGIN_GET_PRIVATE (plugin);
 	GPid pid;
-	const char **gpclient_binary = NULL;
 	GPtrArray *gpclient_argv;
 	GSource *gpclient_watch;
 	gint stdin_fd = -1;
@@ -849,24 +840,7 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 	const char *props_tun_name;
 	const char *connect_server;
 
-	/* Find gpclient */
-	gpclient_binary = gpclient_binary_paths;
-	while (*gpclient_binary != NULL) {
-		if (g_file_test (*gpclient_binary, G_FILE_TEST_EXISTS))
-			break;
-		gpclient_binary++;
-	}
-
-	if (!*gpclient_binary) {
-		g_set_error (error,
-		             NM_VPN_PLUGIN_ERROR,
-		             NM_VPN_PLUGIN_ERROR_LAUNCH_FAILED,
-		             "%s",
-		             _("Could not find gpclient binary."));
-		return -1;
-	}
-
-	if (!nm_gpclient_check_version (*gpclient_binary, "gpclient", error))
+	if (!nm_gpclient_check_version (NM_GPCLIENT_BINARY, "gpclient", error))
 		return -1;
 
 	props_portal = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_PORTAL);
@@ -913,6 +887,10 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 	props_ignore_tls = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_IGNORE_TLS_ERRORS);
 	props_browser = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_BROWSER);
 	envp = build_gpclient_env (s_con);
+	if (!envp)
+		envp = g_get_environ ();
+	/* Keep gpclient's own auth relaunches on the configured gpauth too. */
+	envp = g_environ_setenv (envp, "GP_AUTH_BINARY", NM_GPAUTH_BINARY, TRUE);
 	envp = g_environ_setenv (envp, "NM_GPCLIENT_BROWSER",
 	                        props_browser && strlen (props_browser) ? props_browser : "default",
 	                        TRUE);
@@ -923,13 +901,15 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 		connect_server = (props_portal && strlen (props_portal)) ? props_portal : props_vpn_gw;
 
 	gpclient_argv = g_ptr_array_new ();
-	g_ptr_array_add (gpclient_argv, (gpointer) (*gpclient_binary));
+	g_ptr_array_add (gpclient_argv, (gpointer) NM_GPCLIENT_BINARY);
 	if (props_fix_openssl && !strcmp (props_fix_openssl, "yes"))
 		g_ptr_array_add (gpclient_argv, (gpointer) "--fix-openssl");
 	if (props_ignore_tls && !strcmp (props_ignore_tls, "yes"))
 		g_ptr_array_add (gpclient_argv, (gpointer) "--ignore-tls-errors");
 	g_ptr_array_add (gpclient_argv, (gpointer) "connect");
 	g_ptr_array_add (gpclient_argv, (gpointer) connect_server);
+	g_ptr_array_add (gpclient_argv, (gpointer) "--lock-file");
+	g_ptr_array_add (gpclient_argv, (gpointer) NM_GPCLIENT_LOCK_FILE);
 	if (use_cookie)
 		g_ptr_array_add (gpclient_argv, (gpointer) "--cookie-on-stdin");
 	g_ptr_array_add (gpclient_argv, (gpointer) "--browser");
@@ -1247,6 +1227,25 @@ quit_mainloop (NMOpenconnectPlugin *plugin, gpointer user_data)
 	g_main_loop_quit ((GMainLoop *) user_data);
 }
 
+/* Module loading is best effort: TUN may be built in or already loaded. */
+static void
+load_tun_module (void)
+{
+	char *argv[] = { NM_MODPROBE, "tun", NULL };
+	GError *error = NULL;
+	gint status;
+
+	if (!NM_MODPROBE[0])
+		return;
+	if (!g_spawn_sync (NULL, argv, NULL, G_SPAWN_DEFAULT,
+	                   NULL, NULL, NULL, NULL, &status, &error)) {
+		_LOGW ("Could not load TUN module: %s", error->message);
+		g_clear_error (&error);
+	} else if (!WIFEXITED (status) || WEXITSTATUS (status) != 0) {
+		_LOGW ("TUN module loader failed (wait status %d); continuing in case TUN is already available", status);
+	}
+}
+
 int main (int argc, char *argv[])
 {
 	NMOpenconnectPlugin *plugin;
@@ -1300,8 +1299,7 @@ int main (int argc, char *argv[])
 
 	_LOGD ("nm-gpclient-service (version " DIST_VERSION ") starting...");
 
-	if (system ("/sbin/modprobe tun") == -1)
-		exit (EXIT_FAILURE);
+	load_tun_module ();
 
 	if (bus_name)
 		setenv ("NM_DBUS_SERVICE_OPENCONNECT", bus_name, 0);

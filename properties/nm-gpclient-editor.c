@@ -2,6 +2,7 @@
 
 #include "nm-default.h"
 #include "nm-gpclient-editor-plugin.h"
+#include "nm-gpclient-paths.h"
 
 #include <gtk/gtk.h>
 #include <string.h>
@@ -61,31 +62,9 @@ is_yes(const char *value)
 	return value && !strcmp(value, "yes");
 }
 
-static char *
-find_gpclient_binary(void)
-{
-	static const char *paths[] = {
-		"/usr/bin/gpclient",
-		"/usr/local/bin/gpclient",
-		"/opt/bin/gpclient",
-		NULL
-	};
-	guint i;
-	char *path;
-
-	for (i = 0; paths[i]; i++) {
-		if (g_file_test(paths[i], G_FILE_TEST_EXISTS))
-			return g_strdup(paths[i]);
-	}
-
-	path = g_find_program_in_path("gpclient");
-	return path;
-}
-
 static gboolean
 gpclient_supports_connect_arg(const char *arg)
 {
-	char *binary;
 	char **argv;
 	char *help_text = NULL;
 	GError *error = NULL;
@@ -93,12 +72,8 @@ gpclient_supports_connect_arg(const char *arg)
 	gboolean ok;
 	gboolean supported;
 
-	binary = find_gpclient_binary();
-	if (!binary)
-		return FALSE;
-
 	argv = g_new0(char *, 4);
-	argv[0] = g_strdup(binary);
+	argv[0] = g_strdup(NM_GPCLIENT_BINARY);
 	argv[1] = g_strdup("connect");
 	argv[2] = g_strdup("--help");
 
@@ -113,7 +88,6 @@ gpclient_supports_connect_arg(const char *arg)
 	                  &exit_status,
 	                  &error);
 	g_strfreev(argv);
-	g_free(binary);
 
 	if (!ok) {
 		g_clear_error(&error);

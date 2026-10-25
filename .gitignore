@@ -44,6 +44,7 @@ src/nm-gpclient-service-helper
 auth-dialog/nm-gpclient-auth-dialog
 /tools/test-secret-flags
 /tools/test-reconnect
+/tools/nm-gpclient-auth-dialog-test
 /tools/test-secret-flags.log
 /tools/test-secret-flags.trs
 /tools/test-reconnect.sh.log

@@ -5,7 +5,7 @@ program=@LIBEXECDIR@/nm-gpclient-service
 supports-multiple-connections=true
 
 [libnm]
-plugin=@PLUGINDIR@/libnm-vpn-plugin-gpclient.so
+plugin=@PLUGINDIR@libnm-vpn-plugin-gpclient.so
 
 [GNOME]
 auth-dialog=@LIBEXECDIR@/nm-gpclient-auth-dialog
