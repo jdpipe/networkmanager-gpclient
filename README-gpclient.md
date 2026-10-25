@@ -26,7 +26,9 @@ The service currently reads these VPN data items:
 - `fix_openssl=yes`: passed as `--fix-openssl`.
 - `ignore_tls_errors=yes`: passed as `--ignore-tls-errors`.
 - `enable_csd_trojan=yes` plus `csd_wrapper`: passed as `--hip [script]`.
-- `no_dtls=yes` or inherited `disable_udp=yes`: passed as `--no-dtls`.
+- `no_dtls`: defaults to `yes`, passing `--no-dtls` for HTTPS-only transport.
+  Set `no_dtls=no` to enable DTLS/ESP. If `no_dtls` is absent, the inherited
+  `disable_udp` value is used; if both keys are absent, HTTPS-only is used.
 
 The service currently reads these VPN secrets:
 

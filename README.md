@@ -185,6 +185,40 @@ Portal mode is present in the UI for experimentation, but it is not currently
 recommended for daily use. Direct-gateway mode is the practical path for the
 setup this prototype was built around.
 
+## VPN Transport And Stability
+
+The plugin defaults to **Use HTTPS-only VPN transport**, prioritising
+reliability over potential UDP performance gains. The VPN remains encrypted
+over TLS. This avoids the ESP data channel and the transition from ESP to
+HTTPS if that channel fails.
+
+This default addresses an observed GlobalProtect failure where a VPN stays
+connected while idle but disconnects when traffic starts, such as opening an
+SSH session. Logs may show `ESP receive error: Message too long`, followed by
+`Failed to connect ESP tunnel; using HTTPS instead` and
+`Gateway disconnected immediately after GET-tunnel request`. HTTPS-only
+transport proved more stable in the affected setup; it is not a guarantee
+against other causes of disconnection.
+
+To enable DTLS/ESP for potentially better performance, uncheck **Use HTTPS-only
+VPN transport** in the VPN editor, save, and reconnect. From the command line:
+
+```sh
+nmcli connection modify "<profile-name>" +vpn.data "no_dtls=no"
+```
+
+To restore HTTPS-only transport:
+
+```sh
+nmcli connection modify "<profile-name>" +vpn.data "no_dtls=yes"
+```
+
+Transport changes take effect on the next VPN connection. After upgrading,
+existing profiles without a transport setting also use HTTPS-only on their
+next connection. Explicit `no_dtls=no` settings continue to enable UDP. The
+legacy `disable_udp` setting is honoured when `no_dtls` is absent; `no_dtls`
+takes precedence when both are present.
+
 ## Gateway Selection
 
 GlobalProtect gateway selection is not normally handled inside the browser

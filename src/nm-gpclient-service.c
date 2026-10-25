@@ -146,6 +146,7 @@ static const ValidProperty valid_properties[] = {
 	{ NM_OPENCONNECT_KEY_PEM_PASSPHRASE_FSID, G_TYPE_BOOLEAN, 0, 0 },
 	{ NM_OPENCONNECT_KEY_PREVENT_INVALID_CERT, G_TYPE_BOOLEAN, 0, 0 },
 	{ NM_OPENCONNECT_KEY_DISABLE_UDP, G_TYPE_BOOLEAN, 0, 0 },
+	{ NM_OPENCONNECT_KEY_NO_DTLS,     G_TYPE_BOOLEAN, 0, 0 },
 	{ NM_OPENCONNECT_KEY_PROTOCOL,    G_TYPE_STRING, 0, 0 },
 	{ NM_OPENCONNECT_KEY_PROXY,       G_TYPE_STRING, 0, 0 },
 	{ NM_OPENCONNECT_KEY_CSD_ENABLE,  G_TYPE_BOOLEAN, 0, 0 },
@@ -1014,8 +1015,11 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 
 	props_no_dtls = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_NO_DTLS);
 	props_disable_udp = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_DISABLE_UDP);
-	if ((props_no_dtls && !strcmp (props_no_dtls, "yes")) ||
-	    (props_disable_udp && !strcmp (props_disable_udp, "yes"))) {
+	/* Prefer HTTPS unless UDP was explicitly enabled. The current key
+	 * takes precedence over the legacy disable_udp setting. */
+	if (!props_no_dtls)
+		props_no_dtls = props_disable_udp;
+	if (!props_no_dtls || strcmp (props_no_dtls, "no") != 0) {
 		g_ptr_array_add (gpclient_argv, (gpointer) "--no-dtls");
 	}
 

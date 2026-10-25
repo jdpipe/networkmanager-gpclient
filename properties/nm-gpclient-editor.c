@@ -382,10 +382,13 @@ gpclient_editor_new(NMConnection *connection, GError **error)
 	editor->reported_os_combo = combo;
 	add_row(GTK_GRID(grid), row++, _("Reported OS"), editor->reported_os_combo);
 
-	editor->no_dtls_check = gtk_check_button_new_with_label(_("Disable DTLS/ESP"));
+	editor->no_dtls_check = gtk_check_button_new_with_label(_("Use HTTPS-only VPN transport"));
 	gtk_widget_set_tooltip_text(editor->no_dtls_check,
-	                            _("Use only the TLS tunnel and disable the UDP data channel. This can help on networks that block or break UDP, but may reduce VPN performance."));
-	check_set_active(editor->no_dtls_check, is_yes(vpn_data(connection, NM_OPENCONNECT_KEY_NO_DTLS)));
+	                            _("Recommended for reliability. Disables DTLS/ESP and may prevent disconnects when traffic starts or after being idle. May reduce performance; uncheck to enable the UDP data channel."));
+	value = vpn_data(connection, NM_OPENCONNECT_KEY_NO_DTLS);
+	if (!value)
+		value = vpn_data(connection, NM_OPENCONNECT_KEY_DISABLE_UDP);
+	check_set_active(editor->no_dtls_check, !value || strcmp(value, "no") != 0);
 	gtk_grid_attach(GTK_GRID(grid), editor->no_dtls_check, 1, row++, 1, 1);
 
 	editor->ignore_tls_check = gtk_check_button_new_with_label(_("Ignore TLS errors"));
@@ -481,8 +484,9 @@ editor_update_connection(NMVpnEditor *iface, NMConnection *connection, GError **
 		nm_setting_vpn_add_data_item(s_vpn, NM_OPENCONNECT_KEY_CLIENT_VERSION, client_version);
 	if (reported_os && reported_os[0] && strcmp(reported_os, "default"))
 		nm_setting_vpn_add_data_item(s_vpn, NM_OPENCONNECT_KEY_REPORTED_OS, reported_os);
-	if (check_get_active(editor->no_dtls_check))
-		nm_setting_vpn_add_data_item(s_vpn, NM_OPENCONNECT_KEY_NO_DTLS, "yes");
+	/* Persist the opt-out too, since an absent key now means HTTPS-only. */
+	nm_setting_vpn_add_data_item(s_vpn, NM_OPENCONNECT_KEY_NO_DTLS,
+	                             check_get_active(editor->no_dtls_check) ? "yes" : "no");
 	if (check_get_active(editor->ignore_tls_check))
 		nm_setting_vpn_add_data_item(s_vpn, NM_OPENCONNECT_KEY_IGNORE_TLS_ERRORS, "yes");
 
