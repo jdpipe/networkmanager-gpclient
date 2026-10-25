@@ -8,6 +8,10 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 cat >"$tmpdir/gpauth" <<'EOF'
 #!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+	printf 'gpauth %s\n' "${FAKE_GPAUTH_VERSION:-3.2.0}"
+	exit 0
+fi
 if [ "${1:-}" = "--help" ]; then
 	cat <<'HELP'
 Usage: gpauth [OPTIONS] <SERVER>
@@ -27,7 +31,7 @@ chmod +x "$tmpdir/gpauth"
 export PATH="$tmpdir:$PATH"
 export GPAUTH_ARGV_LOG="$tmpdir/gpauth.argv"
 
-output=$(
+run_dialog() {
 	printf '%s\n' \
 		'DATA_KEY=gateway' \
 		'DATA_VAL=gateway.example.edu' \
@@ -36,19 +40,33 @@ output=$(
 		'DATA_KEY=browser' \
 		'DATA_VAL=default' \
 		'DATA_KEY=host_id' \
-		'DATA_VAL=unsupported-by-fake-gpauth' \
+		'DATA_VAL=test-runtime-host-id' \
 		'DONE' |
 		./auth-dialog/nm-gpclient-auth-dialog \
 			--uuid test-uuid \
 			--name gpclient-test \
 			--service org.freedesktop.NetworkManager.gpclient \
 			--allow-interaction
-)
+}
 
-grep -Fxq -- '--gateway gateway.example.edu --browser default' "$GPAUTH_ARGV_LOG"
+output=$(run_dialog)
+
+grep -Fxq -- '--gateway gateway.example.edu --browser default --host-id test-runtime-host-id' "$GPAUTH_ARGV_LOG"
 printf '%s\n' "$output" | grep -Fxq 'gateway'
 printf '%s\n' "$output" | grep -Fxq 'gateway.example.edu'
 printf '%s\n' "$output" | grep -Fxq 'cookie'
 printf '%s\n' "$output" | grep -Fq '"username":"DOMAIN\\user"'
 
-echo "auth-dialog direct-gateway smoke test passed."
+for version in 2.6.5 4.0.0 invalid; do
+	export FAKE_GPAUTH_VERSION=$version
+	rm -f "$GPAUTH_ARGV_LOG"
+	if run_dialog >"$tmpdir/rejected.output" 2>"$tmpdir/rejected.error"; then
+		echo "auth dialog accepted unsupported gpauth $version" >&2
+		exit 1
+	fi
+	test ! -e "$GPAUTH_ARGV_LOG"
+	test ! -s "$tmpdir/rejected.output"
+	grep -Fq 'gpauth 3.x is required' "$tmpdir/rejected.error"
+done
+
+echo "auth-dialog direct-gateway and version prerequisite tests passed."

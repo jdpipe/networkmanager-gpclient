@@ -8,6 +8,10 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 cat >"$tmpdir/gpauth" <<'EOF'
 #!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+	printf '%s\n' 'gpauth 3.2.0'
+	exit 0
+fi
 if [ "${1:-}" = "--help" ]; then
 	cat <<'HELP'
 Usage: gpauth [OPTIONS] <SERVER>

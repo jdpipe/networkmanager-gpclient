@@ -7,6 +7,7 @@
  */
 
 #include "nm-default.h"
+#include "nm-gpclient-version.h"
 
 #include <errno.h>
 #include <getopt.h>
@@ -64,47 +65,10 @@ add_optional_arg(GPtrArray *argv, const char *arg, const char *value)
 	g_ptr_array_add(argv, (gpointer) value);
 }
 
-static gboolean
-gpauth_supports_arg(const char *arg)
-{
-	static char *help_text = NULL;
-	static gboolean help_loaded = FALSE;
-	GError *error = NULL;
-	gint exit_status = 0;
-
-	if (!help_loaded) {
-		if (!g_spawn_command_line_sync("gpauth --help",
-		                               &help_text,
-		                               NULL,
-		                               &exit_status,
-		                               &error)) {
-			fprintf(stderr, "Failed to inspect gpauth options: %s\n", error->message);
-			g_clear_error(&error);
-		}
-		help_loaded = TRUE;
-	}
-
-	return help_text && g_strstr_len(help_text, -1, arg);
-}
-
-static void
-add_optional_gpauth_arg(GPtrArray *argv, const char *arg, const char *value)
-{
-	if (!value)
-		return;
-
-	if (!gpauth_supports_arg(arg)) {
-		fprintf(stderr, "Skipping unsupported gpauth option '%s'\n", arg);
-		return;
-	}
-
-	add_optional_arg(argv, arg, value);
-}
-
 static void
 add_optional_gpauth_setting_arg(GPtrArray *argv, GHashTable *options, const char *key, const char *arg)
 {
-	add_optional_gpauth_arg(argv, arg, lookup_nonempty(options, key));
+	add_optional_arg(argv, arg, lookup_nonempty(options, key));
 }
 
 static void
@@ -114,7 +78,7 @@ add_optional_gpauth_secret_arg(GPtrArray *argv,
                                const char *key,
                                const char *arg)
 {
-	add_optional_gpauth_arg(argv, arg, lookup_secret_or_option(options, secrets, key));
+	add_optional_arg(argv, arg, lookup_secret_or_option(options, secrets, key));
 }
 
 static void
@@ -122,11 +86,6 @@ add_gpauth_boolean_arg(GPtrArray *argv, GHashTable *options, const char *key, co
 {
 	if (!is_yes(lookup_nonempty(options, key)))
 		return;
-
-	if (!gpauth_supports_arg(arg)) {
-		fprintf(stderr, "Skipping unsupported gpauth option '%s'\n", arg);
-		return;
-	}
 
 	g_ptr_array_add(argv, (gpointer) arg);
 }
@@ -192,6 +151,12 @@ run_gpauth(const char *server,
 	char *stderr_buf = NULL;
 	gint exit_status = 0;
 	gboolean ok;
+
+	if (!nm_gpclient_check_version ("gpauth", "gpauth", &error)) {
+		fprintf(stderr, "%s\n", error->message);
+		g_clear_error(&error);
+		return FALSE;
+	}
 
 	argv = g_ptr_array_new();
 	g_ptr_array_add(argv, "gpauth");

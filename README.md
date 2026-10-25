@@ -19,19 +19,24 @@ NetworkManager IP, DNS, and route configuration.
 
 Another project which appears to provide similar functionality is [GlobalProtect-SAML-NetworkManager](https://github.com/WMP/GlobalProtect-SAML-NetworkManager). This project differs in that it uses the standard globalprotect-openconnect package (gpclient, etc.) rather than bundling its own copy. Also, it doesn't attempt to offer KDE integration at this stage.
 
-## Tested Version
+## Supported Version
 
-This prototype has been tested with:
+This plugin requires unmodified upstream `gpclient` and `gpauth` 3.x. Install
+both from the same upstream version. The older 2.x callback-file protocol is
+no longer supported.
 
-- `gpclient 2.5.4 (2026-05-09)`
-- `gpclient 2.6.4 (494e4a533 2026-06-25)`
+External-browser authentication uses upstream's per-user Unix callback socket.
+Keep upstream's `gpgui.desktop` URL handler installed: its `gpclient launch-gui`
+command forwards `globalprotectcallback:` URLs to `gpauth auth-callback` without
+opening the upstream GUI. The browser helper launches immediately because
+`gpauth` creates its callback socket before opening the browser.
 
 The direct-gateway mode described below is the path that currently works well
 for the tested day-to-day use case. In that sense, this is a useful prototype
 for a specific user's GlobalProtect setup.
 
 Portal mode should not yet be treated as a working general solution. Although
-`gpclient` 2.6.4 provides `--auto-gateway`, this plugin has not yet found a
+`gpclient` provides `--auto-gateway`, this plugin has not yet found a
 reliable NetworkManager workflow for portal-first activation, gateway choice,
 second-stage gateway authentication, and callback handoff. Direct-gateway mode
 is the validated path at this stage.
@@ -59,7 +64,7 @@ with `--cookie-on-stdin`, passes the auth JSON over stdin, and points
 `gpclient` at the NetworkManager helper script.
 
 The service creates a persistent TUN device as root and starts `gpclient`
-under NetworkManager. With `gpclient` 2.6.x the child process is intentionally
+under NetworkManager. The child process is intentionally
 kept in the same privilege shape as `sudo -E gpclient`: the main process runs
 as root for tunnel/session management, while `SUDO_UID`, `SUDO_GID`,
 `SUDO_USER`, and desktop environment variables identify the user session for
@@ -101,7 +106,8 @@ moves the GlobalProtect-specific connection logic under `gpclient`.
 Runtime:
 
 - NetworkManager with libnm VPN plugin support
-- `gpclient` and `gpauth` in the usual system path
+- Matching upstream 3.x `gpclient` and `gpauth` in the usual system path,
+  with upstream's `gpgui.desktop` callback handler installed
 - A desktop/browser environment if browser authentication is required
 
 Build-time core dependencies on Debian/Ubuntu:
@@ -167,7 +173,7 @@ In GNOME Settings or another compatible NetworkManager editor:
 
 1. Open the Add VPN workflow.
 2. Select `GlobalProtect (gpclient)`.
-3. For `gpclient` 2.5.x, use `Connect directly to gateway`.
+3. Select `Connect directly to gateway` for the validated workflow.
 4. Enter the gateway host in `Gateway`.
 5. Leave `Browser` as `Default` unless a specific browser command is needed.
 6. Save the profile and activate it from NetworkManager.
@@ -312,6 +318,23 @@ make check
 ./tools/test-editor-plugin.sh
 ```
 
+To exercise the real upstream 3.x callback transport with synthetic SAML data,
+run the following as your desktop user. It uses only a local HTTP server and
+the per-user callback socket; it does not contact your VPN or open your browser.
+
+```sh
+./tools/test-upstream-auth.sh
+# Or check newly built binaries before installing them:
+./tools/test-upstream-auth.sh \
+  ~/GlobalProtect-openconnect/target/release/gpclient \
+  ~/GlobalProtect-openconnect/target/release/gpauth
+```
+
+This checks successful and failed authentication through the browser helper,
+`gpclient launch-gui`, and `gpauth auth-callback`. A live NetworkManager
+connect, disconnect, and reconnect test is still needed to verify SSO, tunnel
+configuration, routes, DNS, and cleanup with your server.
+
 To verify the installed editor plugin:
 
 ```sh
@@ -359,12 +382,15 @@ reconnect loop.
 
 - The long-running `gpclient` process currently runs as root, matching the
   privilege model of the known-working `sudo -E gpclient connect ...` command.
-  This is a deliberate `gpclient` 2.6.x compatibility tradeoff, not an ideal
-  final security boundary.
+  Desktop authentication helpers run as the user identified by `SUDO_UID`,
+  `SUDO_GID`, and `SUDO_USER`.
 - The browser-auth JSON is passed to `gpclient` over stdin and marked
   `NOT_SAVED` in NetworkManager.
 - Avoid enabling verbose VPN debug logs for normal use, because NetworkManager
   VPN logs can expose sensitive connection details.
+- The browser helper does not write diagnostic logs by default. Set
+  `NM_GPCLIENT_BROWSER_LOG` to an explicit private file path when debugging;
+  these logs include authentication URLs and session environment details.
 
 ## Provenance
 

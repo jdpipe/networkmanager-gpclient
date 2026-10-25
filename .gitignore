@@ -48,6 +48,8 @@ auth-dialog/nm-gpclient-auth-dialog
 /tools/test-secret-flags.trs
 /tools/test-reconnect.sh.log
 /tools/test-reconnect.sh.trs
+/tools/test-browser-helper.sh.log
+/tools/test-browser-helper.sh.trs
 /test-suite.log
 /test-driver
 

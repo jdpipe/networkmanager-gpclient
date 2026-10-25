@@ -25,6 +25,7 @@ src_cppflags = \
 	$(NULL)
 
 libexec_PROGRAMS += src/nm-gpclient-service
+libexec_SCRIPTS = src/nm-gpclient-browser-helper
 
 src_nm_gpclient_service_CPPFLAGS = \
 	$(src_cppflags) \
@@ -197,7 +198,7 @@ auth_dialog_nm_gpclient_auth_dialog_LDADD = \
 	$(GLIB_LIBS)
 
 check_PROGRAMS = tools/test-secret-flags
-TESTS = tools/test-secret-flags
+TESTS = tools/test-secret-flags tools/test-browser-helper.sh
 TESTS_ENVIRONMENT = GPCLIENT_TOP_SRCDIR='$(abs_top_srcdir)' GPCLIENT_TOP_BUILDDIR='$(abs_top_builddir)'
 
 tools_test_secret_flags_SOURCES = \
@@ -217,7 +218,10 @@ tools_test_reconnect_CPPFLAGS = $(src_nm_gpclient_service_CPPFLAGS)
 tools_test_reconnect_LDADD = $(GLIB_LIBS) $(LIBNM_LIBS)
 endif
 
-EXTRA_DIST += tools/test-reconnect.sh tools/create-test-profile.sh
+EXTRA_DIST += tools/test-reconnect.sh tools/create-test-profile.sh \
+	tools/test-browser-helper.sh tools/test-upstream-auth.sh \
+	src/nm-gpclient-browser-helper \
+	shared/nm-gpclient-version.h
 
 
 if WITH_LIBNM_GLIB

@@ -25,6 +25,7 @@
 #include "nm-default.h"
 
 #include "nm-gpclient-service.h"
+#include "nm-gpclient-version.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -73,56 +74,6 @@ static const char *gpclient_binary_paths[] =
 #define NM_GPCLIENT_HELPER_PATH LIBEXECDIR"/nm-gpclient-service-helper"
 #define NM_GPCLIENT_BROWSER_HELPER_PATH LIBEXECDIR"/nm-gpclient-browser-helper"
 #define GPCLIENT_LOCK_FILE "/var/run/gpclient.lock"
-
-static gboolean
-gpclient_supports_connect_arg (const char *binary, const char *arg)
-{
-	static GHashTable *help_cache = NULL;
-	char **argv;
-	char *help_text = NULL;
-	GError *error = NULL;
-	gint exit_status = 0;
-	gboolean ok;
-	gboolean supported;
-
-	if (!help_cache)
-		help_cache = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
-
-	help_text = g_hash_table_lookup (help_cache, binary);
-	if (!help_text) {
-		argv = g_new0 (char *, 4);
-		argv[0] = g_strdup (binary);
-		argv[1] = g_strdup ("connect");
-		argv[2] = g_strdup ("--help");
-
-		ok = g_spawn_sync (NULL,
-		                   argv,
-		                   NULL,
-		                   G_SPAWN_DEFAULT,
-		                   NULL,
-		                   NULL,
-		                   &help_text,
-		                   NULL,
-		                   &exit_status,
-		                   &error);
-		g_strfreev (argv);
-
-		if (!ok) {
-			g_warning ("failed to inspect gpclient options: %s", error->message);
-			g_clear_error (&error);
-			return FALSE;
-		}
-		if (!WIFEXITED (exit_status) || WEXITSTATUS (exit_status) != 0) {
-			g_free (help_text);
-			return FALSE;
-		}
-
-		g_hash_table_insert (help_cache, g_strdup (binary), help_text);
-	}
-
-	supported = help_text && g_strstr_len (help_text, -1, arg);
-	return supported;
-}
 
 typedef struct {
 	const char *name;
@@ -811,7 +762,7 @@ gpclient_drop_child_privs(gpointer user_data)
 		_LOGW ("Failed to create gpclient process group: %s", g_strerror (errno));
 
 	/*
-	 * gpclient 2.6.x assumes the main process has the same shape as
+	 * gpclient uses the same privilege model as
 	 * `sudo -E gpclient`: root for tunnel/session management, with SUDO_UID
 	 * and friends identifying the desktop user for browser auth relaunches.
 	 */
@@ -915,6 +866,9 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 		return -1;
 	}
 
+	if (!nm_gpclient_check_version (*gpclient_binary, "gpclient", error))
+		return -1;
+
 	props_portal = nm_setting_vpn_get_data_item (s_vpn, NM_OPENCONNECT_KEY_PORTAL);
 	props_vpn_gw = nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_GATEWAY);
 	if (!props_vpn_gw || !strlen (props_vpn_gw))
@@ -985,11 +939,7 @@ nm_openconnect_start_openconnect_binary (NMOpenconnectPlugin *plugin,
 		g_ptr_array_add (gpclient_argv, (gpointer) "--as-gateway");
 	} else if (props_portal && strlen (props_portal)) {
 		if (props_auto_gateway && !strcmp (props_auto_gateway, "yes")) {
-			if (gpclient_supports_connect_arg (*gpclient_binary, "--auto-gateway")) {
-				g_ptr_array_add (gpclient_argv, (gpointer) "--auto-gateway");
-			} else {
-				_LOGI ("gpclient does not support --auto-gateway; using portal-only connect");
-			}
+			g_ptr_array_add (gpclient_argv, (gpointer) "--auto-gateway");
 		} else if (props_vpn_gw && strlen (props_vpn_gw)) {
 			g_ptr_array_add (gpclient_argv, (gpointer) "--gateway");
 			g_ptr_array_add (gpclient_argv, (gpointer) props_vpn_gw);
