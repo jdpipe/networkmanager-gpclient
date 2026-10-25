@@ -16,7 +16,7 @@ nmcli connection add \
 	con-name "$name" \
 	ifname "*" \
 	vpn-type org.freedesktop.NetworkManager.gpclient \
-	vpn.data "portal=$portal,auto_gateway=yes,browser=$browser"
+	vpn.data "portal=$portal,auto_gateway=yes,browser=$browser,cookie-flags=2,gateway-flags=2"
 
 echo "Created '$name' for portal '$portal'."
 echo "Start it with: nmcli connection up '$name'"

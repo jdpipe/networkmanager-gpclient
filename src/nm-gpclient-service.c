@@ -294,6 +294,33 @@ nm_openconnect_properties_validate (NMSettingVpn *s_vpn, GError **error)
 }
 
 static gboolean
+validate_auth_secret_flags (NMSettingVpn *s_vpn, GError **error)
+{
+	const char *keys[] = { NM_OPENCONNECT_KEY_COOKIE, NM_OPENCONNECT_KEY_GATEWAY };
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS (keys); i++) {
+		NMSettingSecretFlags flags = NM_SETTING_SECRET_FLAG_NONE;
+
+		/* Agent ownership is compatible with NOT_SAVED; NOT_REQUIRED is not.
+		 * Changing this deserialised copy cannot repair NM or keyring storage. */
+		if (nm_setting_get_secret_flags (NM_SETTING (s_vpn), keys[i], &flags, NULL) &&
+		    (flags == NM_SETTING_SECRET_FLAG_NOT_SAVED ||
+		     flags == (NM_SETTING_SECRET_FLAG_NOT_SAVED | NM_SETTING_SECRET_FLAG_AGENT_OWNED)))
+			continue;
+
+		g_set_error (error,
+		             NM_VPN_PLUGIN_ERROR,
+		             NM_VPN_PLUGIN_ERROR_INVALID_CONNECTION,
+		             _("Unsafe VPN secret flags for '%s'. Set cookie-flags=2 and gateway-flags=2 in vpn.data, remove saved cookie/gateway secrets from the profile and keyring, then reconnect."),
+		             keys[i]);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+static gboolean
 nm_openconnect_secrets_validate (NMSettingVpn *s_vpn, GError **error)
 {
 	ValidateInfo info = { &valid_secrets[0], error, FALSE };
@@ -1099,6 +1126,9 @@ real_connect (NMVpnServicePlugin   *plugin,
 		goto out;
 	s_vpn = nm_connection_get_setting_vpn (connection);
 	g_assert (s_vpn);
+	/* Connect can be called without a preceding NeedSecrets request. */
+	if (!validate_auth_secret_flags (s_vpn, error))
+		goto out;
 	if (!nm_openconnect_properties_validate (s_vpn, error))
 		goto out;
 	if (!nm_openconnect_secrets_validate (s_vpn, error))
@@ -1125,15 +1155,10 @@ real_need_secrets (NMVpnServicePlugin *plugin,
 	NMSettingConnection *s_con;
 	NMSettingVpn *s_vpn;
 	const char *tun_name;
+	const char *cookie;
 
 	g_return_val_if_fail (NM_IS_VPN_SERVICE_PLUGIN (plugin), FALSE);
 	g_return_val_if_fail (NM_IS_CONNECTION (connection), FALSE);
-
-	s_con = nm_connection_get_setting_connection (connection);
-	if (!priv->pid) {
-		tun_name = s_con ? nm_setting_connection_get_interface_name (s_con) : NULL;
-		deactivate_assumed_tun_connection (tun_name && tun_name[0] ? tun_name : "vpn0");
-	}
 
 	s_vpn = nm_connection_get_setting_vpn (connection);
 	if (!s_vpn) {
@@ -1143,6 +1168,16 @@ real_need_secrets (NMVpnServicePlugin *plugin,
 		             "%s",
 		             "Could not process the request because the VPN connection settings were invalid.");
 		return FALSE;
+	}
+
+	/* Reject unsafe profiles before cleanup or accepting a cached cookie. */
+	if (!validate_auth_secret_flags (s_vpn, error))
+		return FALSE;
+
+	s_con = nm_connection_get_setting_connection (connection);
+	if (!priv->pid) {
+		tun_name = s_con ? nm_setting_connection_get_interface_name (s_con) : NULL;
+		deactivate_assumed_tun_connection (tun_name && tun_name[0] ? tun_name : "vpn0");
 	}
 
 	if (!nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_GATEWAY) &&
@@ -1155,7 +1190,8 @@ real_need_secrets (NMVpnServicePlugin *plugin,
 	/* Run browser authentication through NetworkManager's user-session
 	 * auth dialog for both portal and direct-gateway modes, then feed
 	 * the returned gpclient JSON to gpclient via --cookie-on-stdin. */
-	if (!nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_COOKIE)) {
+	cookie = nm_setting_vpn_get_secret (s_vpn, NM_OPENCONNECT_KEY_COOKIE);
+	if (!cookie || !cookie[0]) {
 		*setting_name = NM_SETTING_VPN_SETTING_NAME;
 		return TRUE;
 	}

@@ -1,28 +1,10 @@
 #!/bin/sh
 set -eu
 
-name="${1:-gpclient-test}"
-gateway="${2:-gateway.example.edu}"
-browser="${3:-default}"
-
-json_file="${TMPDIR:-/tmp}/nm-gpclient-gateway-auth.json"
-err_file="${TMPDIR:-/tmp}/nm-gpclient-gateway-auth.err"
-
-rm -f "$json_file" "$err_file"
-gpauth --gateway "$gateway" --browser "$browser" >"$json_file" 2>"$err_file"
-
-if ! test -s "$json_file"; then
-	echo "gpauth did not produce an auth JSON result." >&2
-	test ! -s "$err_file" || tail -n 80 "$err_file" >&2
-	exit 1
-fi
-
-# nmcli's key/value parser treats backslash as an escape character. Preserve
-# JSON domain usernames such as DOMAIN\\user before escaping literal commas.
-json=$(tr -d '\n' <"$json_file" | sed 's/\\/\\\\/g; s/,/\\,/g')
-
-nmcli connection modify "$name" \
-	vpn.data "gateway=$gateway,as_gateway=yes,browser=$browser" \
-	vpn.secrets "cookie=$json"
-
-echo "Stored fresh gateway auth JSON for '$name'."
+cat >&2 <<'EOF'
+This helper is retired: gpauth results must not be stored in a VPN profile.
+Set cookie-flags=2,gateway-flags=2, remove saved cookie/gateway secrets, and
+connect through a running desktop secret agent to obtain fresh authentication.
+See README.md, "Hand-created profiles", for creation and repair commands.
+EOF
+exit 1

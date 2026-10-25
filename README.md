@@ -185,6 +185,50 @@ Portal mode is present in the UI for experimentation, but it is not currently
 recommended for daily use. Direct-gateway mode is the practical path for the
 setup this prototype was built around.
 
+### Hand-created profiles
+
+Profiles created with `nmcli` or a keyfile must mark both `cookie` and
+`gateway` secrets as `NM_SETTING_SECRET_FLAG_NOT_SAVED` (`2`). Saving these
+temporary authentication results can cause a later activation to reuse expired
+`gpauth`/SAML data. The editor sets the flags automatically; manual profiles
+must include them:
+
+```sh
+nmcli connection add type vpn con-name gpclient-direct ifname '*' \
+  vpn-type org.freedesktop.NetworkManager.gpclient \
+  vpn.data 'gateway=gateway.example.edu,as_gateway=yes,browser=default,cookie-flags=2,gateway-flags=2'
+```
+
+For a keyfile, put `cookie-flags=2` and `gateway-flags=2` in the `[vpn]`
+section. Keep the configured gateway host there too; the `gateway` value in
+`[vpn-secrets]` is a separate, temporary authentication result.
+
+The service rejects missing or unsafe flags before accepting credentials and
+checks again before launching `gpclient`. `NOT_SAVED` combined with
+`AGENT_OWNED` (`3`) is also accepted. `NOT_REQUIRED`, malformed flags, and
+flags that allow credentials to be saved are rejected. NetworkManager logs
+the repair instructions; the desktop may still show a generic failure.
+
+To repair an existing profile, disconnect it first, then add the flags and
+remove saved authentication results without replacing other VPN settings:
+
+```sh
+nmcli connection modify gpclient-direct \
+  +vpn.data 'cookie-flags=2,gateway-flags=2' \
+  -vpn.secrets cookie -vpn.secrets gateway
+```
+
+Remove any previously saved `cookie` and `gateway` values from the desktop
+agent's keyring too. Reconnect through a running desktop secret agent to
+obtain fresh authentication. Browser SSO may complete without another login
+prompt; the important point is that `gpauth` runs again.
+
+Changing the flags alone does not establish that an existing cookie is fresh.
+The service cannot determine the expiry of an arbitrary supplied auth result,
+so clearing old secrets is part of the repair. The old
+`tools/store-gateway-cookie.sh` helper is retired because it stored auth JSON
+in profiles; it now prints migration guidance without changing anything.
+
 ## VPN Transport And Stability
 
 The plugin defaults to **Use HTTPS-only VPN transport**, prioritising
@@ -264,6 +308,7 @@ After building, these smoke tests should pass:
 make check
 ./tools/test-auth-dialog.sh
 ./tools/test-auth-dialog-quit.sh
+./tools/test-reconnect.sh
 ./tools/test-editor-plugin.sh
 ```
 

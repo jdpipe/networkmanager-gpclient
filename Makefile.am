@@ -196,6 +196,29 @@ auth_dialog_nm_gpclient_auth_dialog_LDADD = \
 	$(LIBNM_LIBS) \
 	$(GLIB_LIBS)
 
+check_PROGRAMS = tools/test-secret-flags
+TESTS = tools/test-secret-flags
+TESTS_ENVIRONMENT = GPCLIENT_TOP_SRCDIR='$(abs_top_srcdir)' GPCLIENT_TOP_BUILDDIR='$(abs_top_builddir)'
+
+tools_test_secret_flags_SOURCES = \
+	tools/test-secret-flags.c \
+	$(top_srcdir)/shared/nm-utils/nm-shared-utils.c
+tools_test_secret_flags_CPPFLAGS = $(src_nm_gpclient_service_CPPFLAGS)
+tools_test_secret_flags_LDADD = $(GLIB_LIBS) $(LIBNM_LIBS)
+
+if WITH_AUTHDLG
+check_PROGRAMS += tools/test-reconnect
+TESTS += tools/test-reconnect.sh
+
+tools_test_reconnect_SOURCES = \
+	tools/test-reconnect.c \
+	$(top_srcdir)/shared/nm-utils/nm-shared-utils.c
+tools_test_reconnect_CPPFLAGS = $(src_nm_gpclient_service_CPPFLAGS)
+tools_test_reconnect_LDADD = $(GLIB_LIBS) $(LIBNM_LIBS)
+endif
+
+EXTRA_DIST += tools/test-reconnect.sh tools/create-test-profile.sh
+
 
 if WITH_LIBNM_GLIB
 # Install a file with full path to plugins for an old gnome-shell
