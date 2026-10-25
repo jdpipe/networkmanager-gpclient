@@ -69,4 +69,41 @@ subprocess.run([os.environ['TEST_GPCLIENT'], 'launch-gui', os.environ['TEST_CALL
             assert data["success"]["token"] == "synthetic-test-token"
             assert data["success"]["hostId"] == "nm-integration-host"
         print("PASS real gpauth -> NM browser helper -> browser -> gpclient launch-gui -> gpauth auth-callback: " + expected)
+
+    # Use only disposable children and temporary PID files. Neither invocation
+    # reads the host's actual gpclient lock or targets an active VPN.
+    worker_code = "import signal,sys; signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); print('ready', flush=True); signal.pause()"
+    workers = []
+
+    def worker():
+        process = subprocess.Popen([sys.executable, "-c", worker_code], stdout=subprocess.PIPE, text=True)
+        workers.append(process)
+        assert process.stdout.readline().strip() == "ready"
+        return process
+
+    def disconnect(lock):
+        result = subprocess.run([client, "disconnect", "--lock-file", str(lock)], capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+
+    try:
+        managed = worker()
+        standalone = worker()
+        managed_lock = root / "nm-gpclient.lock"
+        standalone_lock = root / "gpclient.lock"
+        managed_lock.write_text(str(managed.pid))
+        standalone_lock.write_text(str(standalone.pid))
+        disconnect(standalone_lock)
+        assert standalone.wait(timeout=5) == 0
+        assert managed.poll() is None
+        standalone = worker()
+        standalone_lock.write_text(str(standalone.pid))
+        disconnect(managed_lock)
+        assert managed.wait(timeout=5) == 0
+        assert standalone.poll() is None
+        print("PASS real gpclient disconnect keeps independently locked clients isolated")
+    finally:
+        for process in workers:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
 PY

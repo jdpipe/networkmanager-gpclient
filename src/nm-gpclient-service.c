@@ -60,6 +60,8 @@ typedef struct {
 	GPid pid;
 	char *tun_name;
 	gboolean disconnect_requested;
+	gboolean quit_pending;
+	guint kill_timeout;
 } NMOpenconnectPluginPrivate;
 
 #define NM_OPENCONNECT_PLUGIN_GET_PRIVATE(o) (G_TYPE_INSTANCE_GET_PRIVATE ((o), NM_TYPE_OPENCONNECT_PLUGIN, NMOpenconnectPluginPrivate))
@@ -789,6 +791,10 @@ openconnect_watch_cb (GPid pid, gint status, gpointer user_data)
 
 	/* Reap child if needed. */
 	waitpid (pid, NULL, WNOHANG);
+	if (priv->kill_timeout) {
+		g_source_remove (priv->kill_timeout);
+		priv->kill_timeout = 0;
+	}
 	priv->pid = 0;
 	priv->disconnect_requested = FALSE;
 
@@ -799,8 +805,11 @@ openconnect_watch_cb (GPid pid, gint status, gpointer user_data)
 		priv->tun_name = NULL;
 	}
 
-	if (disconnect_requested)
+	if (disconnect_requested) {
+		if (priv->quit_pending && gl.loop)
+			g_main_loop_quit (gl.loop);
 		return;
+	}
 
 	/* Must be after data->state is set since signals use data->state */
 	switch (error) {
@@ -1132,7 +1141,12 @@ real_need_secrets (NMVpnServicePlugin *plugin,
 static gboolean
 ensure_killed (gpointer data)
 {
-	int pid = GPOINTER_TO_INT (data);
+	NMOpenconnectPluginPrivate *priv = NM_OPENCONNECT_PLUGIN_GET_PRIVATE (data);
+	GPid pid = priv->pid;
+
+	priv->kill_timeout = 0;
+	if (!pid)
+		return FALSE;
 
 	if (kill (-pid, 0) == 0)
 		kill (-pid, SIGKILL);
@@ -1150,12 +1164,12 @@ real_disconnect (NMVpnServicePlugin   *plugin,
 
 	if (priv->pid) {
 		priv->disconnect_requested = TRUE;
-		if (kill (-priv->pid, SIGINT) == 0)
-			g_timeout_add (2000, ensure_killed, GINT_TO_POINTER (priv->pid));
-		else if (kill (priv->pid, SIGINT) == 0)
-			g_timeout_add (2000, ensure_killed, GINT_TO_POINTER (priv->pid));
-		else
-			kill (-priv->pid, SIGKILL);
+		if (kill (-priv->pid, SIGINT) < 0)
+			kill (priv->pid, SIGINT);
+		if (!priv->kill_timeout)
+			priv->kill_timeout = g_timeout_add_full (G_PRIORITY_DEFAULT, 2000,
+			                                       ensure_killed, g_object_ref (plugin),
+			                                       g_object_unref);
 
 		_LOGI ("Terminated gpclient daemon with PID %d.", priv->pid);
 	}
@@ -1224,6 +1238,16 @@ setup_signals (void)
 static void
 quit_mainloop (NMOpenconnectPlugin *plugin, gpointer user_data)
 {
+	NMOpenconnectPluginPrivate *priv = NM_OPENCONNECT_PLUGIN_GET_PRIVATE (plugin);
+
+	/* libnm emits quit as soon as Disconnect returns. Keep the child watch
+	 * and kill timeout alive until gpclient exits and the TUN is cleaned up. */
+	if (priv->pid) {
+		priv->quit_pending = TRUE;
+		if (!priv->disconnect_requested)
+			real_disconnect (NM_VPN_SERVICE_PLUGIN (plugin), NULL);
+		return;
+	}
 	g_main_loop_quit ((GMainLoop *) user_data);
 }
 

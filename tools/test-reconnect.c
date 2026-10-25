@@ -61,7 +61,6 @@ authenticate (NMConnection *connection, const char *dialog, const char *cookie)
 	                                       NULL, NULL, &pid, &in_fd, &out_fd, NULL, &error));
 	g_assert_no_error (error);
 	g_assert_cmpint (write (in_fd, input->str, input->len), ==, input->len);
-	close (in_fd);
 	g_string_free (input, TRUE);
 	output = fdopen (out_fd, "r");
 	g_assert ((output) != NULL);
@@ -73,6 +72,8 @@ authenticate (NMConnection *connection, const char *dialog, const char *cookie)
 		count++;
 	}
 	fclose (output);
+	g_assert_cmpint (write (in_fd, "QUIT\n", 5), ==, 5);
+	close (in_fd);
 	g_assert_cmpint (waitpid (pid, &status, 0), ==, pid);
 	g_spawn_close_pid (pid);
 	g_assert (WIFEXITED (status));

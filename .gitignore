@@ -43,6 +43,9 @@ src/nm-gpclient-service
 src/nm-gpclient-service-helper
 auth-dialog/nm-gpclient-auth-dialog
 /tools/test-secret-flags
+/tools/test-disconnect
+/tools/test-disconnect.log
+/tools/test-disconnect.trs
 /tools/test-reconnect
 /tools/nm-gpclient-auth-dialog-test
 /tools/test-secret-flags.log
@@ -51,6 +54,9 @@ auth-dialog/nm-gpclient-auth-dialog
 /tools/test-reconnect.sh.trs
 /tools/test-browser-helper.sh.log
 /tools/test-browser-helper.sh.trs
+/tools/test-auth-dialog-cancel.py.log
+/tools/test-auth-dialog-cancel.py.trs
+__pycache__/
 /test-suite.log
 /test-driver
 

@@ -167,7 +167,7 @@ Packagers can configure executable and installation paths directly:
   --with-gpclient=/absolute/path/to/gpclient \
   --with-gpauth=/absolute/path/to/gpauth \
   --with-modprobe=/absolute/path/to/modprobe \
-  --with-gpclient-lock-file=/run/gpclient.lock \
+  --with-gpclient-lock-file=/run/NetworkManager/nm-gpclient.lock \
   --with-nm-plugin-dir=/absolute/path/to/libnm/plugins \
   --with-nm-vpn-service-dir=/absolute/path/to/NetworkManager/VPN
 ```
@@ -179,9 +179,11 @@ auth dialog, and editor. The service also passes the configured `gpauth` path
 to gpclient for later authentication attempts. Use `--without-modprobe` when
 TUN is built in or module loading is managed elsewhere.
 
-The PID lock defaults to `/run/gpclient.lock`; the service passes this path
-to gpclient with `--lock-file` and uses it for stale-lock checks. Create its
-parent directory beforehand if choosing a different location.
+The PID lock defaults to `/run/NetworkManager/nm-gpclient.lock`; the service
+passes this path to gpclient with `--lock-file` and uses it for stale-lock
+checks. Keep this separate from upstream's `/var/run/gpclient.lock` so global
+disconnect commands cannot stop a connection owned by NetworkManager. Create
+its parent directory beforehand if choosing a different location.
 
 Plugin and VPN service directories default to libnm's `pkg-config` values,
 with `${libdir}/NetworkManager` and `${libdir}/NetworkManager/VPN` fallbacks
@@ -353,6 +355,20 @@ make check
 ./tools/test-editor-plugin.sh
 ```
 
+`make check` includes cancellation during pending browser authentication: NM's
+`QUIT` request, a closed request pipe, termination signals, and forced dialog
+termination. Each case verifies that the helper releases its callback lock and
+that a fresh authentication can immediately reuse it. These tests use a fake
+helper and temporary locks; they do not touch a running VPN or browser session.
+
+The auth dialog stops and reaps its own `gpauth` child when a request is cancelled,
+with a forced stop after two seconds if necessary. Linux also stops that child
+if the dialog is killed abruptly. This prevents abandoned authentication from
+blocking later attempts with “Another external-browser authentication is already
+in progress”. There is no need to delete callback lock files or clear browser
+SSO cookies. Protocol callers must keep the request pipe open until the response
+and then send `QUIT`, as NetworkManager's secret agent does.
+
 `./tools/test-packaging.sh` additionally checks non-FHS executable paths,
 module-loader errors, stale-lock cleanup, directory overrides and fallbacks,
 both metadata path modes, and staged installation. It builds temporary copies
@@ -371,7 +387,8 @@ the per-user callback socket; it does not contact your VPN or open your browser.
 ```
 
 This checks successful and failed authentication through the browser helper,
-`gpclient launch-gui`, and `gpauth auth-callback`. A live NetworkManager
+`gpclient launch-gui`, and `gpauth auth-callback`, plus disconnect isolation
+using disposable processes and separate temporary PID files. A live NetworkManager
 connect, disconnect, and reconnect test is still needed to verify SSO, tunnel
 configuration, routes, DNS, and cleanup with your server.
 
@@ -392,13 +409,32 @@ journalctl -b --no-pager --since '10 minutes ago' | \
 
 When the VPN is disconnected through NetworkManager, the service sends
 `SIGINT` to the running `gpclient` process. If it has not exited after a short
-timeout, the service sends `SIGKILL`. Once `gpclient` exits, the service
-destroys the persistent TUN device it created, and NetworkManager removes the
-VPN routes and DNS state.
+timeout, the service sends `SIGKILL`. The service waits for child cleanup
+before quitting and cancels the kill timeout when the child exits. Once
+`gpclient` exits, the service destroys the persistent TUN device it created,
+and NetworkManager removes the VPN routes and DNS state.
 
 If `gpclient` exits unexpectedly, the plugin reports a VPN failure/disconnect
 back to NetworkManager. The plugin does not currently implement its own
 reconnect loop.
+
+Intentional disconnects are treated as normal shutdown, even if gpclient
+returns a nonzero exit status or needs to be killed. Other VPNs can remain
+active: the plugin signals only its own child process group.
+
+Some upstream gpclient packages install a global `pre-down.d/gpclient.down`
+dispatcher hook that runs `gpclient disconnect` whenever any connection goes
+down. With a shared PID lock, this can stop our VPN before NetworkManager
+requests its disconnect (causing a failure notification), or stop it when an
+unrelated VPN is disconnected. The plugin's separate PID lock keeps its
+session outside that global hook's control. No profile-specific settings or
+changes to the vendor dispatcher scripts are required.
+
+After installing a change to the disconnect handling, reconnect the VPN so
+it uses the new service and lock path. Check that an intentional disconnect
+produces no failure notification. With another VPN active, disconnect each
+VPN in turn and verify that the remaining VPN still carries its expected
+traffic and DNS queries.
 
 ## Current Limitations
 
@@ -414,9 +450,6 @@ reconnect loop.
 - Client-certificate support is not polished. In particular, key passwords
   should not be considered production-ready because they can be passed to
   `gpclient` as command-line arguments.
-- The stock `gpclient` package may install its own NetworkManager dispatcher
-  hooks. Those hooks are outside this plugin and may need review if network
-  transition behavior looks surprising.
 
 ## Security Notes
 

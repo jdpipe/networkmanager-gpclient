@@ -55,7 +55,7 @@ cd "$work/build"
     --with-gpclient-lock-file="$work/vpn.lock" >>"$work/build.log" 2>&1
 make -j2 >>"$work/build.log" 2>&1
 printf '%s\n' DATA_KEY=gateway DATA_VAL=gateway.example.invalid DATA_KEY=as_gateway DATA_VAL=yes DONE |
-    ./auth-dialog/nm-gpclient-auth-dialog --uuid packaging-test --name packaging-test \
+    python3 "$work/source/tools/run-auth-dialog-test.py" ./auth-dialog/nm-gpclient-auth-dialog --uuid packaging-test --name packaging-test \
     --service org.freedesktop.NetworkManager.gpclient --allow-interaction >"$work/auth-output"
 grep -Fq synthetic-packaging-cookie "$work/auth-output"
 grep -Fxq 'gpauth:--gateway gateway.example.invalid --browser default' "$PACKAGING_LOG"

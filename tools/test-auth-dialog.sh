@@ -46,7 +46,7 @@ run_dialog() {
 		'DATA_KEY=host_id' \
 		'DATA_VAL=test-runtime-host-id' \
 		'DONE' |
-		./tools/nm-gpclient-auth-dialog-test \
+		python3 ./tools/run-auth-dialog-test.py ./tools/nm-gpclient-auth-dialog-test \
 			--uuid test-uuid \
 			--name gpclient-test \
 			--service org.freedesktop.NetworkManager.gpclient \

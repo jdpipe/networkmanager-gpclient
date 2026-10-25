@@ -197,8 +197,8 @@ auth_dialog_nm_gpclient_auth_dialog_LDADD = \
 	$(LIBNM_LIBS) \
 	$(GLIB_LIBS)
 
-check_PROGRAMS = tools/test-secret-flags
-TESTS = tools/test-secret-flags tools/test-browser-helper.sh
+check_PROGRAMS = tools/test-secret-flags tools/test-disconnect
+TESTS = tools/test-secret-flags tools/test-disconnect tools/test-browser-helper.sh
 TESTS_ENVIRONMENT = GPCLIENT_TOP_SRCDIR='$(abs_top_srcdir)' GPCLIENT_TOP_BUILDDIR='$(abs_top_builddir)'
 
 tools_test_secret_flags_SOURCES = \
@@ -207,10 +207,14 @@ tools_test_secret_flags_SOURCES = \
 tools_test_secret_flags_CPPFLAGS = $(src_nm_gpclient_service_CPPFLAGS)
 tools_test_secret_flags_LDADD = $(GLIB_LIBS) $(LIBNM_LIBS)
 
+tools_test_disconnect_SOURCES = tools/test-disconnect.c $(top_srcdir)/shared/nm-utils/nm-shared-utils.c
+tools_test_disconnect_CPPFLAGS = $(src_nm_gpclient_service_CPPFLAGS)
+tools_test_disconnect_LDADD = $(GLIB_LIBS) $(LIBNM_LIBS)
+
 if WITH_AUTHDLG
 check_PROGRAMS += tools/test-reconnect
 check_PROGRAMS += tools/nm-gpclient-auth-dialog-test
-TESTS += tools/test-reconnect.sh
+TESTS += tools/test-reconnect.sh tools/test-auth-dialog-cancel.py
 
 tools_nm_gpclient_auth_dialog_test_SOURCES = auth-dialog/nm-gpclient-auth-dialog.c
 tools_nm_gpclient_auth_dialog_test_CPPFLAGS = $(auth_dialog_nm_gpclient_auth_dialog_CPPFLAGS) -DNM_GPAUTH_BINARY=\"gpauth\"
@@ -224,6 +228,7 @@ tools_test_reconnect_LDADD = $(GLIB_LIBS) $(LIBNM_LIBS)
 endif
 
 EXTRA_DIST += tools/test-reconnect.sh tools/create-test-profile.sh \
+	tools/test-auth-dialog-cancel.py tools/run-auth-dialog-test.py \
 	tools/test-browser-helper.sh tools/test-upstream-auth.sh tools/test-packaging.sh \
 	src/nm-gpclient-browser-helper \
 	shared/nm-gpclient-version.h shared/nm-gpclient-paths.h
