@@ -1,0 +1,54 @@
+Building locally
+----------------
+
+The packaging builds one binary package with the service, auth helpers, and
+both editor plugins. Build dependencies come from debian/control; gpclient is
+a runtime dependency and is not needed for the build or the simulated tests.
+
+On Ubuntu 24.04 or 26.04, from a clean checkout:
+
+    sudo apt update
+    sudo apt install build-essential devscripts equivs
+    sudo mk-build-deps --install --remove \
+        --tool 'apt-get --yes --no-install-recommends' debian/control
+    dpkg-buildpackage --build=binary --no-sign
+    tools/test-deb.sh ../network-manager-gpclient_*.deb
+
+dpkg-buildpackage runs make check and writes the package to the parent
+directory. It does not install the plugin or require a running VPN, desktop,
+or NetworkManager. Runtime compatibility with a VPN server is a separate check.
+
+GitHub releases
+---------------
+
+.github/workflows/deb.yml builds Ubuntu 24.04 (noble) and 26.04 (resolute), on
+native amd64 and arm64 runners using the corresponding Ubuntu containers.
+Pull requests, pushes to main/master, and manual workflow dispatches build
+and validate packages and retain them as workflow artifacts.
+
+To release:
+
+1. Update debian/changelog with the release's Debian version and changes.
+   Update AC_INIT in configure.ac when changing the upstream version.
+2. Commit and push the changes, and wait for the package workflow to pass.
+3. Tag that commit with v followed by the exact Debian version, then push:
+
+       git tag -a v0.1.0-1 -m 'NetworkManager-gpclient 0.1.0-1'
+       git push origin v0.1.0-1
+
+4. The workflow checks the tag against debian/changelog, appends a distro
+   suffix (for example 0.1.0-1+ubuntu24.04), builds all four packages, and
+   creates a draft GitHub release. It attaches the .deb files, a source
+   archive of the tagged commit, and SHA256SUMS. No additional secret is
+   needed: the release job uses GITHUB_TOKEN with contents: write.
+5. Review the draft's files and installation notes, then publish the release.
+
+For packaging-only changes, increment the Debian revision (for example
+0.1.0-2). Re-running a tag workflow replaces assets on its existing release;
+use a new version once a release has been published.
+
+The first release targets the listed Ubuntu versions. Other Debian-family
+distributions can build from this directory, but require their own dependency
+and runtime validation. The workflow does not bundle gpclient or configure
+the upstream PPA on users' machines. Installation instructions are kept in
+debian/release-notes.md and copied into each release description.

@@ -61,3 +61,14 @@ __pycache__/
 /test-driver
 
 /NetworkManager-openconnect*.tar*
+
+# Debian packaging output
+/_build/
+/dist/
+/debian/.debhelper/
+/debian/debhelper-build-stamp
+/debian/files
+/debian/network-manager-gpclient/
+/debian/*.debhelper
+/debian/*.substvars
+/*-build-deps_*

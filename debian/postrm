@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+case "$1" in
+	remove|purge)
+		if [ -z "${DPKG_ROOT:-}" ] && command -v dbus-send >/dev/null 2>&1; then
+			dbus-send --system --type=method_call --print-reply \
+				--dest=org.freedesktop.DBus / org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
+		fi
+		;;
+esac

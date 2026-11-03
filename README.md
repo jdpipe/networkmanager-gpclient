@@ -126,7 +126,46 @@ sudo apt install libgtk-3-dev libgtk-4-dev libnma-dev
 Package names differ across distributions. Fedora-style equivalents include
 `NetworkManager-libnm-devel`, `gtk3-devel`, `gtk4-devel`, and `libnma-devel`.
 
-## Build And Install
+## Install From A Debian Package
+
+The [GitHub releases](https://github.com/jdpipe/networkmanager-gpclient/releases)
+provide a single `network-manager-gpclient` package with the service,
+authentication helpers, and GTK 3/GTK 4 editor plugins. Choose the `.deb` for
+your Ubuntu version (24.04 or 26.04, included in the filename) and architecture
+(`dpkg --print-architecture`). Other distributions are not yet release targets.
+
+First install upstream's `globalprotect-openconnect` package, which supplies
+`gpclient`, `gpauth`, and the browser callback handler. On Ubuntu, upstream
+provides a PPA:
+
+```sh
+sudo apt install software-properties-common
+sudo add-apt-repository ppa:yuezk/globalprotect-openconnect
+sudo apt update
+sudo apt install globalprotect-openconnect
+```
+
+Alternatively, download a compatible 3.x `.deb` from the
+[upstream releases](https://github.com/yuezk/GlobalProtect-openconnect/releases)
+and install it with `sudo apt install ./globalprotect-openconnect_*.deb`.
+Our package requires version 3.2.0 or newer within the 3.x series. Keep
+upstream's `gpgui.desktop` URL handler installed for browser callbacks.
+
+Then, in a directory containing only the plugin package matching your system:
+
+```sh
+sudo apt install ./network-manager-gpclient_*.deb
+```
+
+APT resolves dependencies from repositories you have configured; installing
+our package does not add the upstream PPA automatically. Reopen your network
+settings or VPN editor after installation. If necessary, disconnect active
+VPNs before restarting NetworkManager; package installation does not restart it.
+
+For local package builds and the tagged GitHub release process, see
+[debian/README.source](debian/README.source).
+
+## Build And Install From Source
 
 For normal desktop use, build and install the core service plus the editor
 plugins:
@@ -227,6 +266,59 @@ user session, and owns the resulting routes and DNS.
 Portal mode is present in the UI for experimentation, but it is not currently
 recommended for daily use. Direct-gateway mode is the practical path for the
 setup this prototype was built around.
+
+### Firefox selection in the browser helper
+
+For authentication launches routed through `nm-gpclient-browser-helper`,
+`Browser=Firefox` selects a Firefox launcher regardless of the desktop's default
+browser or remembered portal choice. The helper tries, in order:
+
+1. `firefox` on its PATH, including a distribution wrapper or Snap launcher.
+2. `firefox-esr` on its PATH.
+3. `snap run firefox`, if `snap list firefox` confirms an installation.
+4. `flatpak run org.mozilla.firefox`, if `flatpak info org.mozilla.firefox`
+   confirms an installation (user or system).
+
+The inherited PATH is retained, including non-FHS paths used by NixOS; the
+helper also appends its existing standard paths, including `/snap/bin`.
+These fallbacks discover installations only. Once a launcher is selected, its
+exit status is returned without retrying another installation. If none is
+found, the helper exits with status 127 and records an explanation when
+`NM_GPCLIENT_BROWSER_LOG` is enabled. It never silently substitutes another
+browser for an explicit Firefox choice.
+
+Firefox receives the URL as one argument, with no private-window, new-instance,
+or profile override. This preserves normal session reuse for the selected
+installation; it cannot share SSO cookies between different Firefox profiles
+or native, Snap and Flatpak installations. When several installations/profiles
+are present, use `Custom` with an executable wrapper to select the intended
+one. For example, select the path to this executable wrapper to use Flatpak:
+
+```sh
+#!/bin/sh
+exec flatpak run org.mozilla.firefox "$@"
+```
+
+The helper treats a Custom value as one executable name/path, not a shell
+command with arguments.
+
+`Default`/`auto` retain the existing desktop-portal route, or `gio open` then
+`xdg-open` when the portal prerequisites are absent. The
+[OpenURI portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.OpenURI.html)
+may use the default or a remembered application and provides no option to
+require Firefox. Explicit Firefox launches therefore bypass that chooser;
+Firefox's own portal use and the authentication callback handler are unchanged.
+The user-session auth dialog currently passes browser choices directly to
+upstream `gpauth`; the routing policy above applies to the browser helper.
+
+Chrome and Chromium are already explicit editor choices and use direct
+launchers. The helper retains Chrome's existing order: `google-chrome-stable`,
+`google-chrome`, then `chromium`; Chromium selects `chromium` directly.
+For Microsoft Edge, choose `Custom` and enter `microsoft-edge` or the installed
+executable's absolute path ([Microsoft's documented Linux paths](https://learn.microsoft.com/en-us/microsoft-edge/web-platform/devtools-mcp-server#executable-path-for-each-edge-channel)).
+Use a wrapper when selecting a particular package or work profile. These paths
+also pass the URL without adding private/incognito or profile flags; real SSO
+still depends on the selected profile and the organisation's sign-in policies.
 
 ### Hand-created profiles
 
@@ -360,6 +452,23 @@ make check
 termination. Each case verifies that the helper releases its callback lock and
 that a fresh authentication can immediately reuse it. These tests use a fake
 helper and temporary locks; they do not touch a running VPN or browser session.
+
+`./tools/test-browser-helper.sh` (also in `make check`) checks Firefox routing
+with and without a session-bus socket and `gdbus`, launcher precedence,
+Snap/Flatpak installation discovery, missing/failed launchers, URL quoting,
+generic portal/GIO/xdg-open routing, custom executables, and opt-in diagnostics.
+It also checks Chrome/Chromium precedence and Edge through Custom.
+It uses fake commands and a socket inode, not a running portal or browser.
+
+Live validation is still required on Ubuntu, NixOS, Arch and Fedora with the
+relevant native, Snap and Flatpak packages. Set another browser as the desktop
+default (and, where applicable, the portal's remembered choice), select Firefox,
+and exercise the helper from the desktop session both with Firefox closed and
+with an existing SSO session. Check the selected installation/profile, the
+`globalprotectcallback:` handoff, and NetworkManager connect/disconnect/reconnect.
+Repeat without a working desktop portal and check `Default` separately. These
+checks are needed for sandbox permissions, Wayland/X11 integration and real VPN
+SSO; simulated routing checks do not establish end-to-end compatibility.
 
 The auth dialog stops and reaps its own `gpauth` child when a request is cancelled,
 with a forced stop after two seconds if necessary. Linux also stops that child

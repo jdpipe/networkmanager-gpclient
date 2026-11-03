@@ -1,0 +1,36 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/architecture.mk
+include /usr/share/dpkg/pkg-info.mk
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@ --with=installsysusers --buildsystem=autoconf --builddirectory=_build
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		--libexecdir=/usr/libexec \
+		--disable-static \
+		--enable-absolute-paths \
+		--with-gnome=yes \
+		--with-gtk4=yes \
+		--with-authdlg=yes \
+		--without-libnm-glib \
+		--without-sso-mib \
+		--with-gpclient=/usr/bin/gpclient \
+		--with-gpauth=/usr/bin/gpauth \
+		--with-modprobe=/usr/sbin/modprobe \
+		--with-nm-plugin-dir=/usr/lib/$(DEB_HOST_MULTIARCH)/NetworkManager \
+		--with-nm-vpn-service-dir=/usr/lib/NetworkManager/VPN \
+		--with-dist-version=$(DEB_VERSION)
+
+override_dh_auto_install:
+	dh_auto_install
+	find debian/network-manager-gpclient -name '*.la' -delete
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym
+
+override_dh_dwz:
+	dh_dwz --no-dwz-multifile

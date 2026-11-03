@@ -63,14 +63,19 @@ case "$browser" in
 		fi
 		;;
 	firefox)
-		if command -v gdbus >/dev/null 2>&1 && [ -S "$XDG_RUNTIME_DIR/bus" ]; then
-			set -- gdbus call --session \
-				--dest org.freedesktop.portal.Desktop \
-				--object-path /org/freedesktop/portal/desktop \
-				--method org.freedesktop.portal.OpenURI.OpenURI \
-				"" "$url" "{}"
-		else
+		# OpenURI cannot select a particular application. Use Firefox's normal
+		# launcher (including distro/Snap wrappers) and keep profile/session reuse.
+		if command -v firefox >/dev/null 2>&1; then
 			set -- firefox "$url"
+		elif command -v firefox-esr >/dev/null 2>&1; then
+			set -- firefox-esr "$url"
+		elif command -v snap >/dev/null 2>&1 && snap list firefox >/dev/null 2>&1; then
+			set -- snap run firefox "$url"
+		elif command -v flatpak >/dev/null 2>&1 && flatpak info org.mozilla.firefox >/dev/null 2>&1; then
+			set -- flatpak run org.mozilla.firefox "$url"
+		else
+			printf '%s: Firefox selected, but no supported Firefox installation found; use a Custom browser executable or wrapper\n' "$0" >>"$log" 2>&1
+			exit 127
 		fi
 		;;
 	chrome)

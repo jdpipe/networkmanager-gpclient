@@ -1,0 +1,6 @@
+network-manager-gpclient (0.1.0-1) unstable; urgency=medium
+
+  * Initial package with the NetworkManager service, authentication helpers,
+    and GTK 3/GTK 4 editor plugins.
+
+ -- John Pye <john.pye@anu.edu.au>  Tue, 03 Nov 2026 12:00:00 +1100

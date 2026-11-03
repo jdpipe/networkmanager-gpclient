@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+# Load the policy after debhelper has created the nm-gpclient system user.
+# Do not restart NetworkManager: it may be carrying an active VPN connection.
+if [ "$1" = configure ] && [ -z "${DPKG_ROOT:-}" ] && command -v dbus-send >/dev/null 2>&1; then
+	dbus-send --system --type=method_call --print-reply \
+		--dest=org.freedesktop.DBus / org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
+fi

@@ -31,7 +31,9 @@ def gone(pid):
     try:
         # An orphan may await reaping by init, but must no longer hold any lock.
         return Path(f"/proc/{pid}/stat").read_text().split(") ", 1)[1].startswith("Z")
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # The process can disappear after opening /proc/PID/stat but before
+        # reading it; procfs may then report ESRCH rather than ENOENT.
         return True
 
 
